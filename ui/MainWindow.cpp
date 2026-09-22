@@ -444,6 +444,7 @@ void MainWindow::syncPaintBrushToolbar()
     const QSignalBlocker bp0(m_paintBrushPixelScaleSpin);
     const QSignalBlocker bp1(m_paintBrushPixelShapeCombo);
     const QSignalBlocker bp2(m_paintBrushPixelDitherCombo);
+    const QSignalBlocker bpPerfect(m_paintBrushPixelPerfect);
     const QSignalBlocker bp3(m_paintBrushPixelMirrorH);
     const QSignalBlocker bp4(m_paintBrushPixelMirrorV);
     const QSignalBlocker bp5(m_paintBrushPixelReplace);
@@ -475,6 +476,8 @@ void MainWindow::syncPaintBrushToolbar()
     m_paintBrushPixelScaleSpin->setValue(qBound(1, brush.pixelScale, 8));
     m_paintBrushPixelShapeCombo->setCurrentIndex(qMax(0, m_paintBrushPixelShapeCombo->findData(brush.pixelShape)));
     m_paintBrushPixelDitherCombo->setCurrentIndex(qMax(0, m_paintBrushPixelDitherCombo->findData(brush.pixelDither)));
+    m_paintBrushPixelPerfect->setChecked(brush.pixelPerfect);
+    m_paintBrushPixelPerfect->setEnabled(pixelMode && brush.pixelSize == 1);
     m_paintBrushPixelMirrorH->setChecked(brush.pixelMirrorH);
     m_paintBrushPixelMirrorV->setChecked(brush.pixelMirrorV);
     m_paintBrushPixelReplace->setChecked(brush.pixelReplaceEnabled);

@@ -792,12 +792,14 @@ struct RasterBrushSettings {
     int pixelScale = 1;                         ///< 1..8 pixels reais por pixel artístico
     QString pixelShape = QStringLiteral("square"); ///< square | circle (procedural)
     QString pixelDither = QStringLiteral("none");  ///< none | 25 | 50 | 75
+    bool pixelPerfect = false;                       ///< remove pixels redundantes em curvas de 1 px
     bool pixelMirrorH = false;
     bool pixelMirrorV = false;
     bool pixelReplaceEnabled = false;
     QColor pixelReplaceColor = QColor(0, 0, 0, 255); ///< comparação exata RGBA
 
     bool pixelArt() const { return authoringMode == QLatin1String("pixel-art"); }
+    bool pixelPerfectActive() const { return pixelArt() && pixelPerfect && pixelSize == 1; }
 
     // Mesclagem orgânica da borda da imagem. Os nomes antigos permanecem
     // internamente para manter compatibilidade com sessões já salvas. A borda

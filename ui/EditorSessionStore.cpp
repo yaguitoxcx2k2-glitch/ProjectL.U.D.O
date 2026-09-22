@@ -61,6 +61,7 @@ void EditorSessionStore::save(const core::Editor& editor)
     settings.setValue(QStringLiteral("rasterBrush/pixelScale"), rb.pixelScale);
     settings.setValue(QStringLiteral("rasterBrush/pixelShape"), rb.pixelShape);
     settings.setValue(QStringLiteral("rasterBrush/pixelDither"), rb.pixelDither);
+    settings.setValue(QStringLiteral("rasterBrush/pixelPerfect"), rb.pixelPerfect);
     settings.setValue(QStringLiteral("rasterBrush/pixelMirrorH"), rb.pixelMirrorH);
     settings.setValue(QStringLiteral("rasterBrush/pixelMirrorV"), rb.pixelMirrorV);
     settings.setValue(QStringLiteral("rasterBrush/pixelReplaceEnabled"), rb.pixelReplaceEnabled);
@@ -143,6 +144,7 @@ bool EditorSessionStore::restore(core::Editor& editor)
     if (rb.pixelDither != QLatin1String("none") && rb.pixelDither != QLatin1String("25") &&
         rb.pixelDither != QLatin1String("50") && rb.pixelDither != QLatin1String("75"))
         rb.pixelDither = QStringLiteral("none");
+    rb.pixelPerfect = settings.value(QStringLiteral("rasterBrush/pixelPerfect"), false).toBool();
     rb.pixelMirrorH = settings.value(QStringLiteral("rasterBrush/pixelMirrorH"), false).toBool();
     rb.pixelMirrorV = settings.value(QStringLiteral("rasterBrush/pixelMirrorV"), false).toBool();
     rb.pixelReplaceEnabled = settings.value(QStringLiteral("rasterBrush/pixelReplaceEnabled"), false).toBool();

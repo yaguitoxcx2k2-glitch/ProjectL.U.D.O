@@ -972,6 +972,10 @@ void MainWindow::buildToolbars()
     m_paintBrushPixelDitherCombo->setToolTip(tr("Aplica um padrão estável na grade de pixels, sem ruído aleatório entre pinceladas."));
     pixelForm->addRow(tr("Dithering:"), m_paintBrushPixelDitherCombo);
 
+    m_paintBrushPixelPerfect = new QCheckBox(tr("Pixel-Perfect"), m_paintBrushPixelBox);
+    m_paintBrushPixelPerfect->setToolTip(tr("Em traços de 1 px art, remove o pixel intermediário redundante de curvas em L para manter diagonais limpas. A preferência fica salva e entra em ação somente com Tamanho = 1 px art."));
+    pixelForm->addRow(m_paintBrushPixelPerfect);
+
     auto* mirrorRow = new QWidget(m_paintBrushPixelBox);
     auto* mirrorLayout = new QHBoxLayout(mirrorRow); mirrorLayout->setContentsMargins(0,0,0,0);
     m_paintBrushPixelMirrorH = new QCheckBox(tr("Horizontal"), mirrorRow);
@@ -1078,6 +1082,9 @@ void MainWindow::buildToolbars()
     connect(m_paintBrushPixelDitherCombo, qOverload<int>(&QComboBox::activated), this, [this, saveBrushSession](int) {
         ed.session.rasterBrush.pixelDither = m_paintBrushPixelDitherCombo->currentData().toString(); saveBrushSession();
     });
+    connect(m_paintBrushPixelPerfect, &QCheckBox::toggled, this, [this, saveBrushSession](bool on) {
+        ed.session.rasterBrush.pixelPerfect = on; saveBrushSession();
+    });
     connect(m_paintBrushPixelMirrorH, &QCheckBox::toggled, this, [this, saveBrushSession](bool on) {
         ed.session.rasterBrush.pixelMirrorH = on; saveBrushSession();
     });
@@ -1122,6 +1129,7 @@ void MainWindow::buildToolbars()
         if (brush.pixelArt()) brush.pixelSize = value;
         else brush.sizePx = value;
         saveBrushSession();
+        if (brush.pixelArt()) syncPaintBrushToolbar();
     });
     connect(m_paintBrushOpacitySpin, qOverload<int>(&QSpinBox::valueChanged), this, [this, saveBrushSession](int value) {
         ed.session.rasterBrush.opacity = value; saveBrushSession();

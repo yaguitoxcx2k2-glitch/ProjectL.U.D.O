@@ -53,7 +53,23 @@ int main()
         assert(near(std::fmod(p.y() - 2.0, 4.0), 0.0));
     }
 
+    // Pixel-Perfect remove somente o canto redundante de uma linha de 1 px.
+    // A=(0,0), B=(1,0), C=(1,1): A e C já se tocam diagonalmente, portanto
+    // B seria o "double pixel" visual. Linha reta e pincel maior não filtram.
+    brush.pixelScale = 1;
+    brush.pixelSize = 1;
+    brush.pixelPerfect = true;
+    assert(paint::rasterBrushPixelPerfectSkipMiddle(
+        brush, QPointF(0.5, 0.5), QPointF(1.5, 0.5), QPointF(1.5, 1.5)));
+    assert(!paint::rasterBrushPixelPerfectSkipMiddle(
+        brush, QPointF(0.5, 0.5), QPointF(1.5, 0.5), QPointF(2.5, 0.5)));
+    brush.pixelSize = 2;
+    assert(!paint::rasterBrushPixelPerfectSkipMiddle(
+        brush, QPointF(0.5, 0.5), QPointF(1.5, 0.5), QPointF(1.5, 1.5)));
+    brush.pixelPerfect = false;
+
     // Dithering 50% fica ancorado na grade global e afeta blocos inteiros.
+    brush.pixelScale = 4;
     brush.pixelDither = QStringLiteral("50");
     brush.pixelSize = 2;
     QImage dithered = paint::rasterBrushPreviewTipAt(brush, QPointF(6, 6));
