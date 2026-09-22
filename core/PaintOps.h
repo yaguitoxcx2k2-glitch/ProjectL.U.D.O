@@ -35,9 +35,30 @@ QImage loadRasterBrushTip(const QString& path);
 /// Distância recomendada entre dabs, em pixels.
 int rasterBrushSpacingPx(const RasterBrushSettings& b);
 
+/// Tamanho físico final do brush. No modo Pixel Art, cada pixel artístico
+/// ocupa pixelScale × pixelScale pixels reais sem alterar a resolução da camada.
+int rasterBrushFootprintPx(const RasterBrushSettings& b);
+
+/// Alinha o cursor à grade inteira usada pelo Pixel Art. No modo normal,
+/// devolve a coordenada sem alterações.
+QPointF rasterBrushSnapPoint(const RasterBrushSettings& b, const QPointF& localPoint);
+
+/// Retângulo local exato que um dab ocupará. É usado pelo motor e pelo preview
+/// para que a silhueta mostre exatamente os mesmos pixels que serão alterados.
+QRectF rasterBrushTargetRect(const RasterBrushSettings& b, const QPointF& localCenter);
+
+/// Centros dos dabs entre dois pontos no modo Pixel Art usando Bresenham sobre
+/// a grade artística. O primeiro ponto é omitido para não repetir o dab anterior.
+QVector<QPointF> rasterBrushPixelLine(const RasterBrushSettings& b,
+                                      const QPointF& from, const QPointF& to);
+
 /// Imagem da ponta do pincel exatamente como será carimbada, usada pela
 /// silhueta/preview sob o cursor. Não altera nenhuma camada.
 QImage rasterBrushPreviewTip(const RasterBrushSettings& b, double strokeAngleDeg = 0.0);
+/// Variante ancorada no ponto local, necessária para o preview de dithering
+/// usar o mesmo padrão global que o dab real.
+QImage rasterBrushPreviewTipAt(const RasterBrushSettings& b, const QPointF& localCenter,
+                               double strokeAngleDeg = 0.0);
 
 /// Aplica um único dab numa Image Layer marcada como paintLayer. Retorna o
 /// retângulo local afetado (coordenadas da própria imagem).

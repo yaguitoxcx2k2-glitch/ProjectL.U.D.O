@@ -17,8 +17,10 @@
 
 QT_BEGIN_NAMESPACE
 class QActionGroup;
+class QCheckBox;
 class QComboBox;
 class QDockWidget;
+class QGroupBox;
 class QFileSystemWatcher;
 class QMenu;
 class QLabel;
@@ -155,8 +157,18 @@ private:
     QComboBox*       m_zoomCombo = nullptr;
     QComboBox*       m_snapCombo = nullptr;
     QDockWidget*     m_paintBrushDock = nullptr;
+    QComboBox*       m_paintBrushAuthoringModeCombo = nullptr;
     QComboBox*       m_paintBrushCombo = nullptr;
     QComboBox*       m_paintBrushUseCombo = nullptr;
+    QGroupBox*       m_paintBrushPixelBox = nullptr;
+    QGroupBox*       m_paintBrushEdgeBox = nullptr;
+    QSpinBox*        m_paintBrushPixelScaleSpin = nullptr;
+    QComboBox*       m_paintBrushPixelShapeCombo = nullptr;
+    QComboBox*       m_paintBrushPixelDitherCombo = nullptr;
+    QCheckBox*       m_paintBrushPixelMirrorH = nullptr;
+    QCheckBox*       m_paintBrushPixelMirrorV = nullptr;
+    QCheckBox*       m_paintBrushPixelReplace = nullptr;
+    QToolButton*     m_paintBrushReplaceColorButton = nullptr;
     QSpinBox*        m_paintBrushSizeSpin = nullptr;
     QSpinBox*        m_paintBrushOpacitySpin = nullptr;
     QSpinBox*        m_paintBrushFlowSpin = nullptr;

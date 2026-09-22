@@ -111,9 +111,74 @@ QImage loadRasterBrushTip(const QString& path)
     return image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 }
 
+int rasterBrushFootprintPx(const RasterBrushSettings& b)
+{
+    if (!b.pixelArt()) return qMax(1, b.sizePx);
+    const int scale = qBound(1, b.pixelScale, 8);
+    // Mantém o mesmo teto físico histórico do brush normal para evitar
+    // alocações gigantes quando tamanho + escala são combinados.
+    return qBound(1, qMax(1, b.pixelSize) * scale, 2048);
+}
+
 int rasterBrushSpacingPx(const RasterBrushSettings& b)
 {
+    if (b.pixelArt()) return qBound(1, b.pixelScale, 8);
     return qMax(1, qRound(qMax(1, b.sizePx) * qBound(1, b.spacingPercent, 400) / 100.0));
+}
+
+QPointF rasterBrushSnapPoint(const RasterBrushSettings& b, const QPointF& localPoint)
+{
+    if (!b.pixelArt()) return localPoint;
+    const int scale = qBound(1, b.pixelScale, 8);
+    const int cellX = int(std::floor(localPoint.x() / scale));
+    const int cellY = int(std::floor(localPoint.y() / scale));
+    return QPointF(cellX * scale + scale * 0.5,
+                   cellY * scale + scale * 0.5);
+}
+
+QRectF rasterBrushTargetRect(const RasterBrushSettings& b, const QPointF& localCenter)
+{
+    if (!b.pixelArt()) {
+        const int size = qMax(1, b.sizePx);
+        return QRectF(localCenter.x() - size / 2.0, localCenter.y() - size / 2.0, size, size);
+    }
+    const int scale = qBound(1, b.pixelScale, 8);
+    const int logicalSize = qMax(1, qMin(b.pixelSize, 2048 / scale));
+    const QPointF snapped = rasterBrushSnapPoint(b, localCenter);
+    const int cellX = int(std::floor(snapped.x() / scale));
+    const int cellY = int(std::floor(snapped.y() / scale));
+    const int leftCell = cellX - logicalSize / 2;
+    const int topCell = cellY - logicalSize / 2;
+    return QRectF(leftCell * scale, topCell * scale,
+                  logicalSize * scale, logicalSize * scale);
+}
+
+QVector<QPointF> rasterBrushPixelLine(const RasterBrushSettings& b,
+                                      const QPointF& from, const QPointF& to)
+{
+    QVector<QPointF> out;
+    if (!b.pixelArt()) return out;
+    const int scale = qBound(1, b.pixelScale, 8);
+    const QPointF a = rasterBrushSnapPoint(b, from);
+    const QPointF z = rasterBrushSnapPoint(b, to);
+    int x0 = int(std::floor(a.x() / scale));
+    int y0 = int(std::floor(a.y() / scale));
+    const int x1 = int(std::floor(z.x() / scale));
+    const int y1 = int(std::floor(z.y() / scale));
+    const int dx = qAbs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    const int dy = -qAbs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    bool first = true;
+    while (true) {
+        if (!first) out.push_back(QPointF(x0 * scale + scale * 0.5,
+                                         y0 * scale + scale * 0.5));
+        first = false;
+        if (x0 == x1 && y0 == y1) break;
+        const int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+    return out;
 }
 
 static QPainter::CompositionMode rasterBlendMode(const QString& id)
@@ -148,6 +213,51 @@ static QImage proceduralRoundTip(int size, int hardness, const QColor& color, qr
         }
     }
     return dab;
+}
+
+static QImage proceduralPixelTip(int logicalSize, const RasterBrushSettings& b, qreal flow)
+{
+    logicalSize = qMax(1, logicalSize);
+    QImage dab(logicalSize, logicalSize, QImage::Format_ARGB32_Premultiplied);
+    dab.fill(Qt::transparent);
+    const double center = (logicalSize - 1) * 0.5;
+    const double radius = qMax(0.5, logicalSize * 0.5);
+    const int alpha = qBound(0, qRound(flow * b.color.alpha()), 255);
+    const QRgb px = qPremultiply(qRgba(b.color.red(), b.color.green(), b.color.blue(), alpha));
+    for (int y = 0; y < logicalSize; ++y) {
+        QRgb* row = reinterpret_cast<QRgb*>(dab.scanLine(y));
+        for (int x = 0; x < logicalSize; ++x) {
+            bool covered = true;
+            if (b.pixelShape == QLatin1String("circle")) {
+                const double dx = x - center, dy = y - center;
+                covered = dx * dx + dy * dy <= radius * radius;
+            }
+            if (covered) row[x] = px;
+        }
+    }
+    return dab;
+}
+
+static bool pixelDitherKeep(const QString& mode, int gx, int gy)
+{
+    if (mode == QLatin1String("25")) return (gx & 1) == 0 && (gy & 1) == 0;
+    if (mode == QLatin1String("50")) return ((gx + gy) & 1) == 0;
+    if (mode == QLatin1String("75")) return !((gx & 1) != 0 && (gy & 1) != 0);
+    return true;
+}
+
+static void applyPixelDither(QImage& dab, const RasterBrushSettings& b, int targetLeft, int targetTop)
+{
+    if (!b.pixelArt() || b.pixelDither == QLatin1String("none")) return;
+    const int scale = qBound(1, b.pixelScale, 8);
+    for (int y = 0; y < dab.height(); ++y) {
+        QRgb* row = reinterpret_cast<QRgb*>(dab.scanLine(y));
+        const int gy = int(std::floor(double(targetTop + y) / scale));
+        for (int x = 0; x < dab.width(); ++x) {
+            const int gx = int(std::floor(double(targetLeft + x) / scale));
+            if (!pixelDitherKeep(b.pixelDither, gx, gy)) row[x] = 0;
+        }
+    }
 }
 
 static bool hasUsefulAlpha(const QImage& image)
@@ -273,15 +383,16 @@ static QImage preparedRasterTipSource(const RasterBrushSettings& b, int size)
 {
     if (b.tipImage.isNull()) return QImage();
     static QCache<QString, QImage> cache(128 * 1024); // custo em KiB
-    const QString key = QStringLiteral("%1|%2|%3|%4|%5|%6|%7")
-        .arg(qulonglong(b.tipImage.cacheKey())).arg(size)
+    const QString key = QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8")
+        .arg(qulonglong(b.tipImage.cacheKey())).arg(size).arg(b.pixelArt() ? 1 : 0)
         .arg(b.softenImageEdges ? 1 : 0).arg(b.edgeSoftnessPercent).arg(b.edgeSoftnessStrength)
         .arg(b.edgeIrregularityPercent).arg(b.preserveEdgeCenter ? 1 : 0);
     if (QImage* hit = cache.object(key)) return *hit;
 
     QImage source = b.tipImage.convertToFormat(QImage::Format_ARGB32);
-    source = source.scaled(size, size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-    source = blendRasterTipEdges(source, b);
+    source = source.scaled(size, size, Qt::IgnoreAspectRatio,
+                           b.pixelArt() ? Qt::FastTransformation : Qt::SmoothTransformation);
+    if (!b.pixelArt()) source = blendRasterTipEdges(source, b);
     const int costKb = qMax(1, int(qMin<qint64>(source.sizeInBytes() / 1024, 32 * 1024)));
     cache.insert(key, new QImage(source), costKb);
     return source;
@@ -290,6 +401,42 @@ static QImage preparedRasterTipSource(const RasterBrushSettings& b, int size)
 static QImage rasterTipImage(const RasterBrushSettings& b, int size, double rotation)
 {
     const qreal flow = qBound(0, b.flow, 100) / 100.0;
+
+    if (b.pixelArt()) {
+        const int scale = qBound(1, b.pixelScale, 8);
+        const int logicalSize = qMax(1, qMin(size, 2048 / scale));
+        QImage logical;
+        if (b.tipMode == QLatin1String("round") || b.tipImage.isNull()) {
+            logical = proceduralPixelTip(logicalSize, b, flow);
+        } else {
+            QImage source = preparedRasterTipSource(b, logicalSize);
+            logical = QImage(logicalSize, logicalSize, QImage::Format_ARGB32_Premultiplied);
+            logical.fill(Qt::transparent);
+            if (b.tipMode == QLatin1String("color")) {
+                QPainter painter(&logical);
+                painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+                painter.setOpacity(flow);
+                painter.drawImage(QPoint(0, 0), source);
+                painter.end();
+            } else {
+                const bool alpha = hasUsefulAlpha(source);
+                for (int y = 0; y < logicalSize; ++y) {
+                    const QRgb* src = reinterpret_cast<const QRgb*>(source.constScanLine(y));
+                    QRgb* dst = reinterpret_cast<QRgb*>(logical.scanLine(y));
+                    for (int x = 0; x < logicalSize; ++x) {
+                        const int mask = alpha ? qAlpha(src[x]) : qGray(src[x]);
+                        const int a = qBound(0, qRound(mask * flow * b.color.alpha() / 255.0), 255);
+                        dst[x] = qPremultiply(qRgba(b.color.red(), b.color.green(), b.color.blue(), a));
+                    }
+                }
+            }
+        }
+        if (b.pixelMirrorH || b.pixelMirrorV) logical = logical.mirrored(b.pixelMirrorH, b.pixelMirrorV);
+        if (scale == 1) return logical;
+        return logical.scaled(logical.width() * scale, logical.height() * scale,
+                              Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    }
+
     if (b.tipMode == QLatin1String("round") || b.tipImage.isNull())
         return proceduralRoundTip(size, b.hardness, b.color, flow);
 
@@ -325,12 +472,22 @@ static QImage rasterTipImage(const RasterBrushSettings& b, int size, double rota
 
 QImage rasterBrushPreviewTip(const RasterBrushSettings& b, double strokeAngleDeg)
 {
-    const int size = qMax(1, b.sizePx);
-    double rotation = b.rotation;
-    if (b.rotateToStroke) rotation += strokeAngleDeg;
+    const int size = b.pixelArt() ? qMax(1, b.pixelSize) : qMax(1, b.sizePx);
+    double rotation = b.pixelArt() ? 0.0 : b.rotation;
+    if (!b.pixelArt() && b.rotateToStroke) rotation += strokeAngleDeg;
     // O preview não aplica jitter/scatter aleatório: a silhueta precisa ser
     // estável enquanto o cursor está parado, como em editores de imagem.
     return rasterTipImage(b, size, rotation);
+}
+
+QImage rasterBrushPreviewTipAt(const RasterBrushSettings& b, const QPointF& localCenter,
+                               double strokeAngleDeg)
+{
+    QImage tip = rasterBrushPreviewTip(b, strokeAngleDeg);
+    if (tip.isNull() || !b.pixelArt()) return tip;
+    const QRectF target = rasterBrushTargetRect(b, localCenter);
+    applyPixelDither(tip, b, qRound(target.left()), qRound(target.top()));
+    return tip;
 }
 
 QRectF rasterBrushDab(QImage* targetImage, const RasterBrushSettings& b,
@@ -339,19 +496,21 @@ QRectF rasterBrushDab(QImage* targetImage, const RasterBrushSettings& b,
 {
     if (!targetImage || targetImage->isNull()) return QRectF();
 
+    const bool pixel = b.pixelArt();
     QRandomGenerator* rng = QRandomGenerator::global();
     double sizeFactor = 1.0;
-    if (b.sizeJitter > 0)
+    if (!pixel && b.sizeJitter > 0)
         sizeFactor -= rng->generateDouble() * qBound(0, b.sizeJitter, 100) / 100.0;
-    const int size = qMax(1, qRound(qMax(1, b.sizePx) * qMax(0.05, sizeFactor)));
+    const int size = pixel ? qMax(1, b.pixelSize)
+                           : qMax(1, qRound(qMax(1, b.sizePx) * qMax(0.05, sizeFactor)));
 
-    double rotation = b.rotation;
-    if (b.rotateToStroke) rotation += strokeAngleDeg;
-    if (b.rotationJitter > 0)
+    double rotation = pixel ? 0.0 : b.rotation;
+    if (!pixel && b.rotateToStroke) rotation += strokeAngleDeg;
+    if (!pixel && b.rotationJitter > 0)
         rotation += (rng->generateDouble() * 2.0 - 1.0) * qBound(0, b.rotationJitter, 360);
 
-    QPointF center = localCenter;
-    if (b.scatterPercent > 0) {
+    QPointF center = pixel ? rasterBrushSnapPoint(b, localCenter) : localCenter;
+    if (!pixel && b.scatterPercent > 0) {
         const double amount = size * qBound(0, b.scatterPercent, 400) / 100.0;
         const double offset = (rng->generateDouble() * 2.0 - 1.0) * amount;
         constexpr double kPi = 3.14159265358979323846;
@@ -361,20 +520,25 @@ QRectF rasterBrushDab(QImage* targetImage, const RasterBrushSettings& b,
 
     QImage dab = rasterTipImage(b, size, rotation);
     if (dab.isNull()) return QRectF();
-    const QRectF target(center.x() - dab.width() / 2.0,
-                        center.y() - dab.height() / 2.0,
-                        dab.width(), dab.height());
+    QRectF target = pixel ? rasterBrushTargetRect(b, center)
+                          : QRectF(center.x() - dab.width() / 2.0,
+                                   center.y() - dab.height() / 2.0,
+                                   dab.width(), dab.height());
+    if (pixel) applyPixelDither(dab, b, qRound(target.left()), qRound(target.top()));
 
     const QRect affected = target.toAlignedRect().intersected(targetImage->rect());
     // Com Alpha Lock, a borracha não pode alterar transparência; portanto ela
     // não modifica o conteúdo. Para esconder visualmente, use a máscara raster.
     if (alphaLock && erase && !alphaMaskMode) return target;
     QImage alphaBefore;
+    QImage replaceBefore;
     if (alphaLock && !alphaMaskMode && !affected.isEmpty())
         alphaBefore = targetImage->copy(affected).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    if (pixel && b.pixelReplaceEnabled && !affected.isEmpty())
+        replaceBefore = targetImage->copy(affected).convertToFormat(QImage::Format_ARGB32_Premultiplied);
 
     QPainter painter(targetImage);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, !pixel);
     if (clipRegion) painter.setClipRegion(*clipRegion, Qt::IntersectClip);
     painter.setOpacity(qBound(0, b.opacity, 100) / 100.0);
     if (alphaMaskMode) {
@@ -403,6 +567,23 @@ QRectF rasterBrushDab(QImage* targetImage, const RasterBrushSettings& b,
         painter.drawImage(target.topLeft(), dab);
     }
     painter.end();
+
+    // Color Replace de Pixel Art é exato: pixels que não tinham a cor-alvo
+    // antes do dab voltam ao valor original. Assim a função também respeita
+    // alpha, máscaras e qualquer blend sem criar uma segunda rota de pintura.
+    if (pixel && b.pixelReplaceEnabled && !replaceBefore.isNull()) {
+        const QColor wanted = b.pixelReplaceColor;
+        for (int y = 0; y < affected.height(); ++y) {
+            const QRgb* beforeRow = reinterpret_cast<const QRgb*>(replaceBefore.constScanLine(y));
+            QRgb* dst = reinterpret_cast<QRgb*>(targetImage->scanLine(affected.y() + y)) + affected.x();
+            for (int x = 0; x < affected.width(); ++x) {
+                const QRgb before = qUnpremultiply(beforeRow[x]);
+                const bool match = qRed(before) == wanted.red() && qGreen(before) == wanted.green() &&
+                                   qBlue(before) == wanted.blue() && qAlpha(before) == wanted.alpha();
+                if (!match) dst[x] = beforeRow[x];
+            }
+        }
+    }
 
     // Alpha Lock real: a pintura altera RGB, mas o canal alpha original fica
     // exatamente igual. Assim pixels transparentes continuam intocados e

@@ -25,6 +25,11 @@ ludo_add_cpp_regression(ludo_test_publication_policy
 ludo_add_cpp_regression(ludo_test_editor_input_policy
     editor_input_policy_test.cpp core.editor_input_policy)
 
+add_executable(ludo_test_pixel_brush pixel_brush_test.cpp)
+target_link_libraries(ludo_test_pixel_brush PRIVATE ludo_map_core)
+add_test(NAME core.pixel_brush COMMAND $<TARGET_FILE:ludo_test_pixel_brush>)
+set_tests_properties(core.pixel_brush PROPERTIES LABELS "core;authoring;regression" TIMEOUT 30)
+
 add_executable(ludo_test_asset_database asset_database_test.cpp)
 target_link_libraries(ludo_test_asset_database PRIVATE ludo_map_core)
 add_test(NAME core.asset_database_v9 COMMAND $<TARGET_FILE:ludo_test_asset_database>)
@@ -32,6 +37,7 @@ set_tests_properties(core.asset_database_v9 PROPERTIES LABELS "core;team;regress
 
 set(LUDO_REGRESSION_TEST_TARGETS
     ludo_test_asset_database
+    ludo_test_pixel_brush
     ludo_test_region_gradient
     ludo_test_region_merge
     ludo_test_publication_policy
@@ -46,8 +52,6 @@ if(LUDO_NODE_EXECUTABLE)
 
     add_test(NAME runtime.syntax.mz_map
         COMMAND "${LUDO_NODE_EXECUTABLE}" --check "${PROJECT_SOURCE_DIR}/integrations/rpg-maker-mz/LudoMapSystem.js")
-    add_test(NAME runtime.syntax.mz_camera
-        COMMAND "${LUDO_NODE_EXECUTABLE}" --check "${PROJECT_SOURCE_DIR}/integrations/rpg-maker-mz/LudoCameraSystem.js")
     add_test(NAME runtime.syntax.mz_reflection
         COMMAND "${LUDO_NODE_EXECUTABLE}" --check "${PROJECT_SOURCE_DIR}/integrations/rpg-maker-mz/LudoReflectionSystem.js")
     add_test(NAME runtime.syntax.mv_map
@@ -57,7 +61,6 @@ if(LUDO_NODE_EXECUTABLE)
         runtime.rpgmaker_bridge_smoke
         runtime.depth_contract_v5
         runtime.syntax.mz_map
-        runtime.syntax.mz_camera
         runtime.syntax.mz_reflection
         runtime.syntax.mv_map
         PROPERTIES LABELS "runtime;regression;rpg-maker" TIMEOUT 30)

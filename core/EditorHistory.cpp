@@ -2,6 +2,7 @@
 #include "LayerTree.h"
 
 #include <utility>
+#include <QPainter>
 
 namespace core {
 
@@ -105,6 +106,21 @@ Editor::EditSession Editor::beginLayerEdit(const LayerPtr& layer)
     return s;
 }
 
+void Editor::markLayerEditRasterDirty(EditSession& s, const QRect& localRect, bool mask)
+{
+    if (!s.valid || !s.layer || localRect.isEmpty()) return;
+    if (s.rasterDirtySet && s.rasterDirtyMask != mask) {
+        // Um stroke normal nunca alterna conteúdo/máscara. Se um chamador fizer
+        // isso, desabilitamos o diff parcial e caímos no snapshot completo.
+        s.rasterDirtySet = false;
+        s.rasterDirty = QRect();
+        return;
+    }
+    s.rasterDirtyMask = mask;
+    s.rasterDirty = s.rasterDirtySet ? s.rasterDirty.united(localRect) : localRect;
+    s.rasterDirtySet = true;
+}
+
 static bool sameSnapshot(const LayerSnapshot& a, const LayerSnapshot& b)
 {
     if (a.data2D.size() != b.data2D.size()) return false;
@@ -158,7 +174,40 @@ void Editor::commitLayerEdit(EditSession& s, const QString& label)
     // visitar cada célula.
     bool changed = false;
     bool tileMetadataSame = true;
-    if (s.layer->type == LayerType::Tile) {
+    bool rasterHandled = false;
+
+    if (s.rasterDirtySet) {
+        const QImage& beforeRaster = s.rasterDirtyMask ? s.before.imageMask : s.before.image;
+        const QImage& afterRaster = s.rasterDirtyMask ? after.imageMask : after.image;
+        const bool targetCompatible = !beforeRaster.isNull() && !afterRaster.isNull() &&
+                                      beforeRaster.size() == afterRaster.size();
+        QRect dirty = s.rasterDirty;
+        if (targetCompatible) dirty = dirty.intersected(beforeRaster.rect());
+
+        if (targetCompatible && !dirty.isEmpty()) {
+            const QImage beforePatch = beforeRaster.copy(dirty);
+            const QImage afterPatch = afterRaster.copy(dirty);
+            if (beforePatch != afterPatch) {
+                e.rasterDiff = true;
+                e.rasterMaskDiff = s.rasterDirtyMask;
+                e.rasterRect = dirty;
+                e.beforeRaster = beforePatch;
+                e.afterRaster = afterPatch;
+                changed = true;
+                rasterHandled = true;
+            } else {
+                // MapView marca dirty somente para o alvo raster do stroke. Se
+                // o patch não mudou, não há nada para colocar no histórico.
+                s.valid = false;
+                return;
+            }
+        }
+    }
+
+    if (rasterHandled) {
+        // O histórico já recebeu apenas o patch local; não carregue snapshots
+        // inteiros da imagem para cada pincelada.
+    } else if (s.layer->type == LayerType::Tile) {
         tileMetadataSame = s.before.offsetx == after.offsetx &&
                            s.before.offsety == after.offsety &&
                            s.before.imageMask.cacheKey() == after.imageMask.cacheKey() &&
@@ -320,7 +369,19 @@ void Editor::undo()
         d->rpgMakerRegionsAuthored = e.beforeRegionsAuthored;
     } else {
         LayerPtr l = findNode(e.layerId);
-        if (l && e.tileDiff && l->type == LayerType::Tile) {
+        if (l && e.rasterDiff) {
+            QImage* target = e.rasterMaskDiff ? &l->imageMask : &l->image;
+            if (target && !target->isNull()) {
+                QPainter painter(target);
+                painter.setCompositionMode(QPainter::CompositionMode_Source);
+                painter.drawImage(e.rasterRect.topLeft(), e.beforeRaster);
+                painter.end();
+                if (!e.rasterMaskDiff && l->type == LayerType::Image) {
+                    l->imagewidth = l->image.width();
+                    l->imageheight = l->image.height();
+                }
+            }
+        } else if (l && e.tileDiff && l->type == LayerType::Tile) {
             for (const TileHistoryChange& change : e.tileChanges)
                 if (l->inBounds(change.x, change.y)) l->data2D[change.y][change.x] = change.before;
         } else if (l) {
@@ -361,7 +422,19 @@ void Editor::redo()
         d->rpgMakerRegionsAuthored = e.afterRegionsAuthored;
     } else {
         LayerPtr l = findNode(e.layerId);
-        if (l && e.tileDiff && l->type == LayerType::Tile) {
+        if (l && e.rasterDiff) {
+            QImage* target = e.rasterMaskDiff ? &l->imageMask : &l->image;
+            if (target && !target->isNull()) {
+                QPainter painter(target);
+                painter.setCompositionMode(QPainter::CompositionMode_Source);
+                painter.drawImage(e.rasterRect.topLeft(), e.afterRaster);
+                painter.end();
+                if (!e.rasterMaskDiff && l->type == LayerType::Image) {
+                    l->imagewidth = l->image.width();
+                    l->imageheight = l->image.height();
+                }
+            }
+        } else if (l && e.tileDiff && l->type == LayerType::Tile) {
             for (const TileHistoryChange& change : e.tileChanges)
                 if (l->inBounds(change.x, change.y)) l->data2D[change.y][change.x] = change.after;
         } else if (l) {

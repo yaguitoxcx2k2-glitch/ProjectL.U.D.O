@@ -113,9 +113,10 @@ static QRectF rasterLocalRectToMapRect(const LayerPtr& layer, const QRectF& loca
     return localRect.translated(layer ? layer->offsetx : 0, layer ? layer->offsety : 0);
 }
 
-static QImage rasterBrushSilhouette(const RasterBrushSettings& brush, const QColor& outline)
+static QImage rasterBrushSilhouette(const RasterBrushSettings& brush, const QColor& outline,
+                                    const QPointF& localCenter)
 {
-    const QImage tip = paint::rasterBrushPreviewTip(brush).convertToFormat(QImage::Format_ARGB32);
+    const QImage tip = paint::rasterBrushPreviewTipAt(brush, localCenter).convertToFormat(QImage::Format_ARGB32);
     if (tip.isNull()) return QImage();
     QImage preview(tip.size(), QImage::Format_ARGB32_Premultiplied);
     preview.fill(Qt::transparent);
@@ -332,6 +333,14 @@ QRectF MapView::hoverVisualMapRect(const QPoint& cell, const QPointF& mapPos) co
         const int sw = stamp.valid() ? stamp.w : 1;
         const int sh = stamp.valid() ? stamp.h : 1;
         return QRectF(visual.x(), visual.y(), sw * gw, sh * gh);
+    }
+
+    const bool rasterTarget = isEditingRasterMask(ed, l) ||
+        (l->type == LayerType::Image && (l->imagePaintLayer || l->alphaLock));
+    if (rasterTarget && (ed.session.tool == Tool::Paint || ed.session.tool == Tool::Eraser)) {
+        const QPointF local = l->type == LayerType::Image ? mapToImageLocalPoint(l, mapPos)
+                                                          : mapToLayerPoint(l, mapPos);
+        return rasterLocalRectToMapRect(l, paint::rasterBrushTargetRect(ed.session.rasterBrush, local));
     }
 
     if (l->type != LayerType::Tile) return cellMapRect(cell);
@@ -965,20 +974,24 @@ void MapView::drawGhost(QPainter& p)
     if (rasterTarget && (ed.session.tool == Tool::Paint || ed.session.tool == Tool::Eraser)) {
         const RasterBrushSettings& b = ed.session.rasterBrush;
         const bool erasePreview = ed.session.heldErase || ed.session.tool == Tool::Eraser;
+        const QPointF local = l->type == LayerType::Image ? mapToImageLocalPoint(l, m_hoverMap)
+                                                          : mapToLayerPoint(l, m_hoverMap);
         const QImage silhouette = rasterBrushSilhouette(
-            b, erasePreview ? QColor("#ff6b6b") : QColor("#f2f2f2"));
+            b, erasePreview ? QColor("#ff6b6b") : QColor("#f2f2f2"), local);
         if (!silhouette.isNull()) {
             p.save();
+            QPointF topLeft;
+            if (b.pixelArt()) {
+                topLeft = paint::rasterBrushTargetRect(b, local).topLeft();
+            } else {
+                topLeft = QPointF(local.x() - silhouette.width() / 2.0,
+                                  local.y() - silhouette.height() / 2.0);
+            }
             if (l->type == LayerType::Image) {
-                const QPointF local = mapToImageLocalPoint(l, m_hoverMap);
-                const QPointF topLeft(local.x() - silhouette.width() / 2.0,
-                                      local.y() - silhouette.height() / 2.0);
                 p.setTransform(imageLocalToMapTransform(l), true);
                 p.drawImage(topLeft, silhouette);
             } else {
-                const QPointF topLeft(m_hoverMap.x() - silhouette.width() / 2.0,
-                                      m_hoverMap.y() - silhouette.height() / 2.0);
-                p.drawImage(topLeft, silhouette);
+                p.drawImage(topLeft + QPointF(l->offsetx, l->offsety), silhouette);
             }
             p.restore();
         }
@@ -1568,10 +1581,34 @@ void MapView::beginStroke(const QPointF& mapPos, Qt::MouseButton button, Qt::Key
     const bool imageContentPaint = l->type == LayerType::Image && (l->imagePaintLayer || l->alphaLock);
     if ((editingMask || imageContentPaint) && (ed.session.tool == Tool::Paint || ed.session.tool == Tool::Eraser)) {
         if (button != Qt::LeftButton) return;
-        const QPointF local = l->type == LayerType::Image ? mapToImageLocalPoint(l, mapPos)
-                                                          : mapToLayerPoint(l, mapPos);
-        const double radius = qMax(1, ed.session.rasterBrush.sizePx) * 0.5;
+        const QPointF rawLocal = l->type == LayerType::Image ? mapToImageLocalPoint(l, mapPos)
+                                                             : mapToLayerPoint(l, mapPos);
         const QSize targetSize = editingMask ? rasterMaskSizeFor(l) : l->image.size();
+
+        // Conta-gotas rápido integrado ao mesmo brush. Alt captura a cor de
+        // pintura; Shift+Alt captura a cor-alvo do Color Replace.
+        if (mods & Qt::AltModifier) {
+            const QImage* source = editingMask ? &l->imageMask : &l->image;
+            const QPoint sample(int(std::floor(rawLocal.x())), int(std::floor(rawLocal.y())));
+            if (source && !source->isNull() && source->rect().contains(sample)) {
+                const QRgb rgba = qUnpremultiply(source->pixel(sample));
+                const QColor picked(qRed(rgba), qGreen(rgba), qBlue(rgba), qAlpha(rgba));
+                if (mods & Qt::ShiftModifier) {
+                    ed.session.rasterBrush.pixelReplaceColor = picked;
+                    ed.session.rasterBrush.pixelReplaceEnabled = true;
+                    emit statusMessage(tr("Cor-alvo do Pixel Art capturada: %1").arg(picked.name(QColor::HexArgb)));
+                } else {
+                    ed.session.rasterBrush.color = picked;
+                    emit statusMessage(tr("Cor do pincel capturada: %1").arg(picked.name(QColor::HexArgb)));
+                }
+                emit ed.selectionChanged();
+                update();
+            }
+            return;
+        }
+
+        const QPointF local = paint::rasterBrushSnapPoint(ed.session.rasterBrush, rawLocal);
+        const double radius = paint::rasterBrushFootprintPx(ed.session.rasterBrush) * 0.5;
         const QRectF targetBounds(QPointF(0, 0), QSizeF(targetSize));
         if (!targetBounds.adjusted(-radius, -radius, radius, radius).contains(local)) return;
 
@@ -1604,7 +1641,10 @@ void MapView::beginStroke(const QPointF& mapPos, Qt::MouseButton button, Qt::Key
         } else {
             dirtyLocal = paint::rasterBrushDab(l, ed.session.rasterBrush, local, m_rasterErasing, 0.0);
         }
-        if (!dirtyLocal.isEmpty()) updateMapRect(rasterLocalRectToMapRect(l, dirtyLocal), 4);
+        if (!dirtyLocal.isEmpty()) {
+            ed.markLayerEditRasterDirty(m_rasterSession, dirtyLocal.toAlignedRect(), editingMask);
+            updateMapRect(rasterLocalRectToMapRect(l, dirtyLocal), 4);
+        }
         return;
     }
 
@@ -2130,36 +2170,53 @@ void MapView::mouseMoveEvent(QMouseEvent* e)
             m_rasterPainting = false;
             return;
         }
-        const QPointF current = paintLayer->type == LayerType::Image
+        const QPointF rawCurrent = paintLayer->type == LayerType::Image
             ? mapToImageLocalPoint(paintLayer, mp) : mapToLayerPoint(paintLayer, mp);
-        QLineF path(m_rasterLastLocal, current);
-        const double length = path.length();
-        const int spacingPx = paint::rasterBrushSpacingPx(ed.session.rasterBrush);
+        const QPointF current = paint::rasterBrushSnapPoint(ed.session.rasterBrush, rawCurrent);
         QRectF dirty;
-        if (length > 0.001) {
-            constexpr double kPi = 3.14159265358979323846;
-            const double angle = std::atan2(current.y() - m_rasterLastLocal.y(),
-                                            current.x() - m_rasterLastLocal.x()) * 180.0 / kPi;
-            double distance = spacingPx - m_rasterSpacingCarry;
-            while (distance <= length + 0.0001) {
-                const QPointF point = path.pointAt(qBound(0.0, distance / length, 1.0));
-                QRectF dab;
-                if (editingMaskNow) {
-                    RasterBrushSettings maskBrush = ed.session.rasterBrush;
-                    maskBrush.blendMode = QStringLiteral("source-over");
-                    dab = paint::rasterBrushDab(&paintLayer->imageMask, maskBrush, point,
-                                                m_rasterErasing, angle, true, false,
-                                                m_rasterUseClipRegion ? &m_rasterClipRegion : nullptr);
-                } else {
-                    dab = paint::rasterBrushDab(paintLayer, ed.session.rasterBrush, point, m_rasterErasing, angle);
-                }
-                dirty = dirty.isEmpty() ? dab : dirty.united(dab);
-                distance += spacingPx;
+
+        auto applyDab = [&](const QPointF& point, double angle) {
+            QRectF dab;
+            if (editingMaskNow) {
+                RasterBrushSettings maskBrush = ed.session.rasterBrush;
+                maskBrush.blendMode = QStringLiteral("source-over");
+                dab = paint::rasterBrushDab(&paintLayer->imageMask, maskBrush, point,
+                                            m_rasterErasing, angle, true, false,
+                                            m_rasterUseClipRegion ? &m_rasterClipRegion : nullptr);
+            } else {
+                dab = paint::rasterBrushDab(paintLayer, ed.session.rasterBrush, point, m_rasterErasing, angle);
             }
-            m_rasterSpacingCarry = std::fmod(m_rasterSpacingCarry + length, double(spacingPx));
+            if (!dab.isEmpty()) dirty = dirty.isEmpty() ? dab : dirty.united(dab);
+        };
+
+        if (ed.session.rasterBrush.pixelArt()) {
+            // Bresenham na grade artística: cada célula do caminho recebe um
+            // dab inteiro, sem subpixel, interpolação ou buracos diagonais.
+            const QVector<QPointF> points = paint::rasterBrushPixelLine(ed.session.rasterBrush,
+                                                                         m_rasterLastLocal, current);
+            for (const QPointF& point : points) applyDab(point, 0.0);
+            m_rasterSpacingCarry = 0.0;
+        } else {
+            QLineF path(m_rasterLastLocal, current);
+            const double length = path.length();
+            const int spacingPx = paint::rasterBrushSpacingPx(ed.session.rasterBrush);
+            if (length > 0.001) {
+                constexpr double kPi = 3.14159265358979323846;
+                const double angle = std::atan2(current.y() - m_rasterLastLocal.y(),
+                                                current.x() - m_rasterLastLocal.x()) * 180.0 / kPi;
+                double distance = spacingPx - m_rasterSpacingCarry;
+                while (distance <= length + 0.0001) {
+                    applyDab(path.pointAt(qBound(0.0, distance / length, 1.0)), angle);
+                    distance += spacingPx;
+                }
+                m_rasterSpacingCarry = std::fmod(m_rasterSpacingCarry + length, double(spacingPx));
+            }
         }
         m_rasterLastLocal = current;
-        if (!dirty.isEmpty()) updateMapRect(rasterLocalRectToMapRect(paintLayer, dirty), 5);
+        if (!dirty.isEmpty()) {
+            ed.markLayerEditRasterDirty(m_rasterSession, dirty.toAlignedRect(), editingMaskNow);
+            updateMapRect(rasterLocalRectToMapRect(paintLayer, dirty), 5);
+        }
         return;
     }
 

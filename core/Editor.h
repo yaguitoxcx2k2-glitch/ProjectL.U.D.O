@@ -17,6 +17,7 @@
 #include <QStringList>
 #include <QMargins>
 #include <QRectF>
+#include <QRect>
 #include <QHash>
 #include <QPointF>
 #include <QSizeF>
@@ -84,6 +85,12 @@ struct HistoryEntry {
     bool          document = false;
     bool          tileDiff = false;
     bool          regionDiff = false;
+    // Strokes raster guardam somente a região realmente alterada. Isso evita
+    // manter uma cópia inteira de uma Paint Layer grande para cada pincelada.
+    bool          rasterDiff = false;
+    bool          rasterMaskDiff = false;
+    QRect         rasterRect;
+    QImage        beforeRaster, afterRaster;
     QString       label;
     QString       layerId;
     QVector<TileHistoryChange> tileChanges;
@@ -392,8 +399,16 @@ public:
     void          applyDocSnapshot(const DocSnapshot& s);
 
     /// Inicia uma edicao de camada; guarde o retorno e passe a commitLayerEdit.
-    struct EditSession { LayerPtr layer; LayerSnapshot before; bool valid = false; };
+    struct EditSession {
+        LayerPtr layer;
+        LayerSnapshot before;
+        bool valid = false;
+        QRect rasterDirty;
+        bool rasterDirtySet = false;
+        bool rasterDirtyMask = false;
+    };
     EditSession beginLayerEdit(const LayerPtr& layer = LayerPtr());
+    void        markLayerEditRasterDirty(EditSession& s, const QRect& localRect, bool mask);
     void        commitLayerEdit(EditSession& s, const QString& label = QString());
 
     /// Historico de operacao estrutural.

@@ -178,6 +178,45 @@ class Protocol9Architecture(unittest.TestCase):
         self.assertIn('"rpgMakerStructurePending"', publication)
         self.assertIn('"rpgMakerPendingDeletedMapIds"', publication)
 
+    def test_pixel_art_brush_is_integrated_into_raster_authoring(self):
+        model = self.text("core/Model.h")
+        paint_h = self.text("core/PaintOps.h")
+        paint = self.text("core/PaintOps.cpp")
+        view = self.text("ui/MapView.cpp")
+        session = self.text("ui/EditorSessionStore.cpp")
+        window = self.text("ui/MainWindowActions.cpp") + self.text("ui/MainWindow.cpp")
+        history_h = self.text("core/Editor.h")
+        history = self.text("core/EditorHistory.cpp")
+
+        for token in ("authoringMode", "pixelSize", "pixelScale", "pixelShape", "pixelDither",
+                      "pixelMirrorH", "pixelMirrorV", "pixelReplaceEnabled"):
+            self.assertIn(token, model)
+        self.assertIn("rasterBrushSnapPoint", paint_h)
+        self.assertIn("rasterBrushPixelLine", paint_h)
+        self.assertIn("Qt::FastTransformation", paint)
+        self.assertIn("pixelDitherKeep", paint)
+        self.assertIn("Bresenham", view)
+        self.assertIn("Shift+Alt", view)
+        self.assertIn('rasterBrush/authoringMode', session)
+        self.assertIn('rasterBrush/pixelSize', session)
+        self.assertIn('tr("Pixel Art")', window)
+        self.assertIn("m_paintBrushPixelBox", window)
+        self.assertIn("rasterDiff", history_h)
+        self.assertIn("markLayerEditRasterDirty", history)
+        self.assertIn("beforeRaster", history)
+
+    def test_runtime_syntax_tests_reference_authoritative_integrations_only(self):
+        cmake = self.text("tests/CMakeLists.txt")
+        self.assertNotIn("LudoCameraSystem.js", cmake)
+        self.assertNotIn("runtime.syntax.mz_camera", cmake)
+        for plugin in (
+            "integrations/rpg-maker-mz/LudoMapSystem.js",
+            "integrations/rpg-maker-mz/LudoReflectionSystem.js",
+            "integrations/rpg-maker-mv/LudoMapSystem.js",
+        ):
+            self.assertTrue((ROOT / plugin).exists(), plugin)
+            self.assertIn(plugin, cmake)
+
     def test_layer_multi_selection_is_one_editor_state(self):
         editor = self.text("core/Editor.cpp")
         panel = self.text("ui/LayerPanel.cpp")

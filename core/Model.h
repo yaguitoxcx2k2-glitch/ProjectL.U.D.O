@@ -766,7 +766,10 @@ struct BrushSettings {
 /// Pincel raster livre, separado do Brush de Tiles. A ponta pode ser
 /// procedural, uma alpha mask colorizada ou uma imagem RGBA completa.
 struct RasterBrushSettings {
-    int sizePx = 64;                    ///< diâmetro em pixels
+    // O mesmo motor atende pintura livre e Pixel Art. `authoringMode` muda
+    // rasterização/interpolação/coordenadas, sem criar uma segunda ferramenta.
+    QString authoringMode = QStringLiteral("normal"); ///< normal | pixel-art
+    int sizePx = 64;                    ///< diâmetro físico do modo normal
     int opacity = 100;                  ///< opacidade máxima do stroke, 0..100
     int flow = 100;                     ///< alpha por dab, 0..100
     int hardness = 80;                  ///< borda do círculo procedural, 0..100
@@ -781,6 +784,20 @@ struct RasterBrushSettings {
     int sizeJitter = 0;                 ///< 0..100
     int rotationJitter = 0;             ///< amplitude aleatória em graus
     QString blendMode = QStringLiteral("source-over");
+
+    // Pixel Art -----------------------------------------------------------
+    // pixelScale amplia cada pixel artístico como bloco inteiro, sempre com
+    // nearest-neighbour. O canvas não muda de resolução: é só o passo do brush.
+    int pixelSize = 1;                          ///< diâmetro em pixels artísticos, independente do modo normal
+    int pixelScale = 1;                         ///< 1..8 pixels reais por pixel artístico
+    QString pixelShape = QStringLiteral("square"); ///< square | circle (procedural)
+    QString pixelDither = QStringLiteral("none");  ///< none | 25 | 50 | 75
+    bool pixelMirrorH = false;
+    bool pixelMirrorV = false;
+    bool pixelReplaceEnabled = false;
+    QColor pixelReplaceColor = QColor(0, 0, 0, 255); ///< comparação exata RGBA
+
+    bool pixelArt() const { return authoringMode == QLatin1String("pixel-art"); }
 
     // Mesclagem orgânica da borda da imagem. Os nomes antigos permanecem
     // internamente para manter compatibilidade com sessões já salvas. A borda

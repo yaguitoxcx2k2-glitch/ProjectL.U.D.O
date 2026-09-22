@@ -42,6 +42,7 @@ void EditorSessionStore::save(const core::Editor& editor)
     settings.setValue(QStringLiteral("brush/alphaMaskInvert"), editor.session.brush.alphaMaskInvert);
 
     const auto& rb = editor.session.rasterBrush;
+    settings.setValue(QStringLiteral("rasterBrush/authoringMode"), rb.authoringMode);
     settings.setValue(QStringLiteral("rasterBrush/sizePx"), rb.sizePx);
     settings.setValue(QStringLiteral("rasterBrush/opacity"), rb.opacity);
     settings.setValue(QStringLiteral("rasterBrush/flow"), rb.flow);
@@ -56,6 +57,14 @@ void EditorSessionStore::save(const core::Editor& editor)
     settings.setValue(QStringLiteral("rasterBrush/sizeJitter"), rb.sizeJitter);
     settings.setValue(QStringLiteral("rasterBrush/rotationJitter"), rb.rotationJitter);
     settings.setValue(QStringLiteral("rasterBrush/blendMode"), rb.blendMode);
+    settings.setValue(QStringLiteral("rasterBrush/pixelSize"), rb.pixelSize);
+    settings.setValue(QStringLiteral("rasterBrush/pixelScale"), rb.pixelScale);
+    settings.setValue(QStringLiteral("rasterBrush/pixelShape"), rb.pixelShape);
+    settings.setValue(QStringLiteral("rasterBrush/pixelDither"), rb.pixelDither);
+    settings.setValue(QStringLiteral("rasterBrush/pixelMirrorH"), rb.pixelMirrorH);
+    settings.setValue(QStringLiteral("rasterBrush/pixelMirrorV"), rb.pixelMirrorV);
+    settings.setValue(QStringLiteral("rasterBrush/pixelReplaceEnabled"), rb.pixelReplaceEnabled);
+    settings.setValue(QStringLiteral("rasterBrush/pixelReplaceColor"), rb.pixelReplaceColor);
     settings.setValue(QStringLiteral("rasterBrush/softenImageEdges"), rb.softenImageEdges);
     settings.setValue(QStringLiteral("rasterBrush/edgeSoftnessPercent"), rb.edgeSoftnessPercent);
     settings.setValue(QStringLiteral("rasterBrush/edgeSoftnessStrength"), rb.edgeSoftnessStrength);
@@ -103,6 +112,9 @@ bool EditorSessionStore::restore(core::Editor& editor)
     }
 
     auto& rb = editor.session.rasterBrush;
+    rb.authoringMode = settings.value(QStringLiteral("rasterBrush/authoringMode"), QStringLiteral("normal")).toString();
+    if (rb.authoringMode != QLatin1String("normal") && rb.authoringMode != QLatin1String("pixel-art"))
+        rb.authoringMode = QStringLiteral("normal");
     rb.sizePx = qBound(1, settings.value(QStringLiteral("rasterBrush/sizePx"), 64).toInt(), 2048);
     rb.opacity = qBound(1, settings.value(QStringLiteral("rasterBrush/opacity"), 100).toInt(), 100);
     rb.flow = qBound(1, settings.value(QStringLiteral("rasterBrush/flow"), 100).toInt(), 100);
@@ -121,6 +133,20 @@ bool EditorSessionStore::restore(core::Editor& editor)
     rb.sizeJitter = qBound(0, settings.value(QStringLiteral("rasterBrush/sizeJitter"), 0).toInt(), 100);
     rb.rotationJitter = qBound(0, settings.value(QStringLiteral("rasterBrush/rotationJitter"), 0).toInt(), 360);
     rb.blendMode = settings.value(QStringLiteral("rasterBrush/blendMode"), QStringLiteral("source-over")).toString();
+    rb.pixelSize = qBound(1, settings.value(QStringLiteral("rasterBrush/pixelSize"), 1).toInt(), 2048);
+    rb.pixelScale = qBound(1, settings.value(QStringLiteral("rasterBrush/pixelScale"), 1).toInt(), 8);
+    rb.pixelSize = qMin(rb.pixelSize, qMax(1, 2048 / rb.pixelScale));
+    rb.pixelShape = settings.value(QStringLiteral("rasterBrush/pixelShape"), QStringLiteral("square")).toString();
+    if (rb.pixelShape != QLatin1String("square") && rb.pixelShape != QLatin1String("circle"))
+        rb.pixelShape = QStringLiteral("square");
+    rb.pixelDither = settings.value(QStringLiteral("rasterBrush/pixelDither"), QStringLiteral("none")).toString();
+    if (rb.pixelDither != QLatin1String("none") && rb.pixelDither != QLatin1String("25") &&
+        rb.pixelDither != QLatin1String("50") && rb.pixelDither != QLatin1String("75"))
+        rb.pixelDither = QStringLiteral("none");
+    rb.pixelMirrorH = settings.value(QStringLiteral("rasterBrush/pixelMirrorH"), false).toBool();
+    rb.pixelMirrorV = settings.value(QStringLiteral("rasterBrush/pixelMirrorV"), false).toBool();
+    rb.pixelReplaceEnabled = settings.value(QStringLiteral("rasterBrush/pixelReplaceEnabled"), false).toBool();
+    rb.pixelReplaceColor = settings.value(QStringLiteral("rasterBrush/pixelReplaceColor"), QColor(0,0,0,255)).value<QColor>();
     rb.softenImageEdges = settings.value(QStringLiteral("rasterBrush/softenImageEdges"), false).toBool();
     rb.edgeSoftnessPercent = qBound(1, settings.value(QStringLiteral("rasterBrush/edgeSoftnessPercent"), 18).toInt(), 50);
     rb.edgeSoftnessStrength = qBound(0, settings.value(QStringLiteral("rasterBrush/edgeSoftnessStrength"), 70).toInt(), 100);

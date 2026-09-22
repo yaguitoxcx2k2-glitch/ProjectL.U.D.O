@@ -908,6 +908,12 @@ void MainWindow::buildToolbars()
     auto* basicForm = new QFormLayout(basicBox);
     basicForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
+    m_paintBrushAuthoringModeCombo = new QComboBox(basicBox);
+    m_paintBrushAuthoringModeCombo->addItem(tr("Pintura normal"), QStringLiteral("normal"));
+    m_paintBrushAuthoringModeCombo->addItem(tr("Pixel Art"), QStringLiteral("pixel-art"));
+    m_paintBrushAuthoringModeCombo->setToolTip(tr("Pixel Art alinha a pintura aos pixels, não borra as bordas e mantém diagonais contínuas. Continua usando o mesmo motor de pintura e máscaras."));
+    basicForm->addRow(tr("Modo:"), m_paintBrushAuthoringModeCombo);
+
     m_paintBrushCombo = new QComboBox(basicBox);
     m_paintBrushCombo->setMinimumWidth(150);
     m_paintBrushCombo->setIconSize(QSize(32, 32));
@@ -944,28 +950,71 @@ void MainWindow::buildToolbars()
     basicForm->addRow(tr("Cor:"), m_paintBrushColorButton);
     brushRoot->addWidget(basicBox);
 
-    auto* edgeBox = new QGroupBox(tr("Mesclagem da textura"), brushBody);
-    auto* edgeForm = new QFormLayout(edgeBox);
+    m_paintBrushPixelBox = new QGroupBox(tr("Pixel Art"), brushBody);
+    auto* pixelForm = new QFormLayout(m_paintBrushPixelBox);
+    m_paintBrushPixelScaleSpin = new QSpinBox(m_paintBrushPixelBox);
+    m_paintBrushPixelScaleSpin->setRange(1, 8);
+    m_paintBrushPixelScaleSpin->setSuffix(QStringLiteral("x"));
+    m_paintBrushPixelScaleSpin->setToolTip(tr("Cada pixel artístico ocupa este bloco de pixels reais. A resolução da camada não é alterada."));
+    pixelForm->addRow(tr("Escala do pixel:"), m_paintBrushPixelScaleSpin);
+
+    m_paintBrushPixelShapeCombo = new QComboBox(m_paintBrushPixelBox);
+    m_paintBrushPixelShapeCombo->addItem(tr("Quadrado"), QStringLiteral("square"));
+    m_paintBrushPixelShapeCombo->addItem(tr("Círculo pixelado"), QStringLiteral("circle"));
+    m_paintBrushPixelShapeCombo->setToolTip(tr("Forma usada pelo pincel procedural. Pincéis de imagem continuam usando a própria silhueta."));
+    pixelForm->addRow(tr("Forma:"), m_paintBrushPixelShapeCombo);
+
+    m_paintBrushPixelDitherCombo = new QComboBox(m_paintBrushPixelBox);
+    m_paintBrushPixelDitherCombo->addItem(tr("Nenhum"), QStringLiteral("none"));
+    m_paintBrushPixelDitherCombo->addItem(tr("25%"), QStringLiteral("25"));
+    m_paintBrushPixelDitherCombo->addItem(tr("50% (xadrez)"), QStringLiteral("50"));
+    m_paintBrushPixelDitherCombo->addItem(tr("75%"), QStringLiteral("75"));
+    m_paintBrushPixelDitherCombo->setToolTip(tr("Aplica um padrão estável na grade de pixels, sem ruído aleatório entre pinceladas."));
+    pixelForm->addRow(tr("Dithering:"), m_paintBrushPixelDitherCombo);
+
+    auto* mirrorRow = new QWidget(m_paintBrushPixelBox);
+    auto* mirrorLayout = new QHBoxLayout(mirrorRow); mirrorLayout->setContentsMargins(0,0,0,0);
+    m_paintBrushPixelMirrorH = new QCheckBox(tr("Horizontal"), mirrorRow);
+    m_paintBrushPixelMirrorV = new QCheckBox(tr("Vertical"), mirrorRow);
+    mirrorLayout->addWidget(m_paintBrushPixelMirrorH);
+    mirrorLayout->addWidget(m_paintBrushPixelMirrorV);
+    mirrorLayout->addStretch(1);
+    pixelForm->addRow(tr("Espelhar:"), mirrorRow);
+
+    m_paintBrushPixelReplace = new QCheckBox(tr("Pintar somente sobre uma cor exata"), m_paintBrushPixelBox);
+    m_paintBrushPixelReplace->setToolTip(tr("Color Replace: somente pixels com a cor-alvo RGBA são alterados. Shift+Alt no mapa captura a cor-alvo."));
+    pixelForm->addRow(m_paintBrushPixelReplace);
+    m_paintBrushReplaceColorButton = new QToolButton(m_paintBrushPixelBox);
+    m_paintBrushReplaceColorButton->setToolTip(tr("Cor exata usada pelo Color Replace. Shift+Alt também pode capturá-la diretamente do mapa."));
+    pixelForm->addRow(tr("Cor-alvo:"), m_paintBrushReplaceColorButton);
+    auto* pixelHint = new QLabel(tr("Alt captura a cor do pincel. Shift+Alt captura a cor-alvo. As linhas ficam contínuas e nunca criam meio pixel."), m_paintBrushPixelBox);
+    pixelHint->setWordWrap(true);
+    pixelHint->setStyleSheet(QStringLiteral("color:#9aa3ad;"));
+    pixelForm->addRow(pixelHint);
+    brushRoot->addWidget(m_paintBrushPixelBox);
+
+    m_paintBrushEdgeBox = new QGroupBox(tr("Mesclagem da textura"), brushBody);
+    auto* edgeForm = new QFormLayout(m_paintBrushEdgeBox);
     m_paintBrushEdgeAction = new QAction(tr("Mesclar bordas"), this);
     m_paintBrushEdgeAction->setCheckable(true);
     m_paintBrushEdgeAction->setToolTip(tr("Mistura somente o contorno real da transparência com a superfície abaixo. O centro da textura não é desfocado."));
-    auto* edgeEnabled = new QCheckBox(tr("Mesclar bordas"), edgeBox);
+    auto* edgeEnabled = new QCheckBox(tr("Mesclar bordas"), m_paintBrushEdgeBox);
     edgeEnabled->setToolTip(m_paintBrushEdgeAction->toolTip());
     edgeForm->addRow(edgeEnabled);
 
-    m_paintBrushEdgeSpin = new QSpinBox(edgeBox);
+    m_paintBrushEdgeSpin = new QSpinBox(m_paintBrushEdgeBox);
     m_paintBrushEdgeSpin->setRange(1, 50);
     m_paintBrushEdgeSpin->setSuffix(QStringLiteral("%"));
     m_paintBrushEdgeSpin->setToolTip(tr("Define quanto do contorno entra na transição. Entre 12% e 20% costuma funcionar bem para manchas e sujeira."));
     edgeForm->addRow(tr("Área da borda:"), m_paintBrushEdgeSpin);
 
-    m_paintBrushEdgeStrengthSpin = new QSpinBox(edgeBox);
+    m_paintBrushEdgeStrengthSpin = new QSpinBox(m_paintBrushEdgeBox);
     m_paintBrushEdgeStrengthSpin->setRange(0, 100);
     m_paintBrushEdgeStrengthSpin->setSuffix(QStringLiteral("%"));
     m_paintBrushEdgeStrengthSpin->setToolTip(tr("Define quanto o contorno perde opacidade para se misturar com a superfície abaixo."));
     edgeForm->addRow(tr("Força:"), m_paintBrushEdgeStrengthSpin);
 
-    m_paintBrushEdgeIrregularitySpin = new QSpinBox(edgeBox);
+    m_paintBrushEdgeIrregularitySpin = new QSpinBox(m_paintBrushEdgeBox);
     m_paintBrushEdgeIrregularitySpin->setRange(0, 100);
     m_paintBrushEdgeIrregularitySpin->setSuffix(QStringLiteral("%"));
     m_paintBrushEdgeIrregularitySpin->setToolTip(tr("Quebra a transição uniforme para a borda parecer mais orgânica. Útil para sujeira, sangue, musgo e fuligem."));
@@ -974,10 +1023,10 @@ void MainWindow::buildToolbars()
     m_paintBrushPreserveCenterAction = new QAction(tr("Preservar centro"), this);
     m_paintBrushPreserveCenterAction->setCheckable(true);
     m_paintBrushPreserveCenterAction->setToolTip(tr("Mantém o miolo e os detalhes internos da textura intactos. Só a região próxima ao contorno é mesclada."));
-    auto* preserveCenter = new QCheckBox(tr("Preservar centro da textura"), edgeBox);
+    auto* preserveCenter = new QCheckBox(tr("Preservar centro da textura"), m_paintBrushEdgeBox);
     preserveCenter->setToolTip(m_paintBrushPreserveCenterAction->toolTip());
     edgeForm->addRow(preserveCenter);
-    brushRoot->addWidget(edgeBox);
+    brushRoot->addWidget(m_paintBrushEdgeBox);
 
     auto* libraryBox = new QGroupBox(tr("Biblioteca de pincéis"), brushBody);
     auto* libraryLayout = new QHBoxLayout(libraryBox);
@@ -1013,6 +1062,39 @@ void MainWindow::buildToolbars()
         EditorSessionStore::save(ed);
         if (m_view) m_view->update();
     };
+    connect(m_paintBrushAuthoringModeCombo, qOverload<int>(&QComboBox::activated), this, [this, saveBrushSession](int) {
+        ed.session.rasterBrush.authoringMode = m_paintBrushAuthoringModeCombo->currentData().toString();
+        saveBrushSession(); syncPaintBrushToolbar();
+    });
+    connect(m_paintBrushPixelScaleSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this, saveBrushSession](int value) {
+        auto& brush = ed.session.rasterBrush;
+        brush.pixelScale = value;
+        brush.pixelSize = qMin(brush.pixelSize, qMax(1, 2048 / qBound(1, value, 8)));
+        saveBrushSession(); syncPaintBrushToolbar();
+    });
+    connect(m_paintBrushPixelShapeCombo, qOverload<int>(&QComboBox::activated), this, [this, saveBrushSession](int) {
+        ed.session.rasterBrush.pixelShape = m_paintBrushPixelShapeCombo->currentData().toString(); saveBrushSession();
+    });
+    connect(m_paintBrushPixelDitherCombo, qOverload<int>(&QComboBox::activated), this, [this, saveBrushSession](int) {
+        ed.session.rasterBrush.pixelDither = m_paintBrushPixelDitherCombo->currentData().toString(); saveBrushSession();
+    });
+    connect(m_paintBrushPixelMirrorH, &QCheckBox::toggled, this, [this, saveBrushSession](bool on) {
+        ed.session.rasterBrush.pixelMirrorH = on; saveBrushSession();
+    });
+    connect(m_paintBrushPixelMirrorV, &QCheckBox::toggled, this, [this, saveBrushSession](bool on) {
+        ed.session.rasterBrush.pixelMirrorV = on; saveBrushSession();
+    });
+    connect(m_paintBrushPixelReplace, &QCheckBox::toggled, this, [this, saveBrushSession](bool on) {
+        ed.session.rasterBrush.pixelReplaceEnabled = on; saveBrushSession(); syncPaintBrushToolbar();
+    });
+    connect(m_paintBrushReplaceColorButton, &QToolButton::clicked, this, [this, saveBrushSession] {
+        const QColor picked = QColorDialog::getColor(ed.session.rasterBrush.pixelReplaceColor, this,
+                                                      tr("Cor-alvo do Pixel Art"), QColorDialog::ShowAlphaChannel);
+        if (!picked.isValid()) return;
+        ed.session.rasterBrush.pixelReplaceColor = picked;
+        saveBrushSession(); syncPaintBrushToolbar();
+    });
+
     connect(m_paintBrushCombo, qOverload<int>(&QComboBox::activated), this, [this, saveBrushSession](int index) {
         const QString path = m_paintBrushCombo->itemData(index).toString();
         auto& brush = ed.session.rasterBrush;
@@ -1036,7 +1118,10 @@ void MainWindow::buildToolbars()
         syncPaintBrushToolbar();
     });
     connect(m_paintBrushSizeSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this, saveBrushSession](int value) {
-        ed.session.rasterBrush.sizePx = value; saveBrushSession();
+        auto& brush = ed.session.rasterBrush;
+        if (brush.pixelArt()) brush.pixelSize = value;
+        else brush.sizePx = value;
+        saveBrushSession();
     });
     connect(m_paintBrushOpacitySpin, qOverload<int>(&QSpinBox::valueChanged), this, [this, saveBrushSession](int value) {
         ed.session.rasterBrush.opacity = value; saveBrushSession();

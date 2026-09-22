@@ -430,6 +430,7 @@ void MainWindow::syncPaintBrushToolbar()
     if (!m_paintBrushCombo) return;
     const RasterBrushSettings& brush = ed.session.rasterBrush;
 
+    const QSignalBlocker bm(m_paintBrushAuthoringModeCombo);
     const QSignalBlocker b0(m_paintBrushCombo);
     const QSignalBlocker b1(m_paintBrushUseCombo);
     const QSignalBlocker b2(m_paintBrushSizeSpin);
@@ -440,6 +441,15 @@ void MainWindow::syncPaintBrushToolbar()
     const QSignalBlocker b7(m_paintBrushEdgeStrengthSpin);
     const QSignalBlocker b8(m_paintBrushEdgeIrregularitySpin);
     const QSignalBlocker b9(m_paintBrushPreserveCenterAction);
+    const QSignalBlocker bp0(m_paintBrushPixelScaleSpin);
+    const QSignalBlocker bp1(m_paintBrushPixelShapeCombo);
+    const QSignalBlocker bp2(m_paintBrushPixelDitherCombo);
+    const QSignalBlocker bp3(m_paintBrushPixelMirrorH);
+    const QSignalBlocker bp4(m_paintBrushPixelMirrorV);
+    const QSignalBlocker bp5(m_paintBrushPixelReplace);
+
+    const int authoringIndex = m_paintBrushAuthoringModeCombo->findData(brush.authoringMode);
+    m_paintBrushAuthoringModeCombo->setCurrentIndex(qMax(0, authoringIndex));
 
     int brushIndex = brush.tipMode == QLatin1String("round") ? 0 : m_paintBrushCombo->findData(brush.tipImagePath);
     if (brush.tipMode != QLatin1String("round") && brushIndex < 0 && !brush.tipImagePath.isEmpty()) {
@@ -452,7 +462,9 @@ void MainWindow::syncPaintBrushToolbar()
             Qt::ToolTipRole);
     }
     m_paintBrushCombo->setCurrentIndex(qMax(0, brushIndex));
-    m_paintBrushSizeSpin->setValue(brush.sizePx);
+    const bool pixelMode = brush.pixelArt();
+    m_paintBrushSizeSpin->setRange(1, pixelMode ? qMax(1, 2048 / qBound(1, brush.pixelScale, 8)) : 2048);
+    m_paintBrushSizeSpin->setValue(pixelMode ? brush.pixelSize : brush.sizePx);
     m_paintBrushOpacitySpin->setValue(brush.opacity);
     m_paintBrushFlowSpin->setValue(brush.flow);
     m_paintBrushEdgeSpin->setValue(qBound(1, brush.edgeSoftnessPercent, 50));
@@ -460,15 +472,33 @@ void MainWindow::syncPaintBrushToolbar()
     m_paintBrushEdgeIrregularitySpin->setValue(qBound(0, brush.edgeIrregularityPercent, 100));
     m_paintBrushEdgeAction->setChecked(brush.softenImageEdges);
     m_paintBrushPreserveCenterAction->setChecked(brush.preserveEdgeCenter);
+    m_paintBrushPixelScaleSpin->setValue(qBound(1, brush.pixelScale, 8));
+    m_paintBrushPixelShapeCombo->setCurrentIndex(qMax(0, m_paintBrushPixelShapeCombo->findData(brush.pixelShape)));
+    m_paintBrushPixelDitherCombo->setCurrentIndex(qMax(0, m_paintBrushPixelDitherCombo->findData(brush.pixelDither)));
+    m_paintBrushPixelMirrorH->setChecked(brush.pixelMirrorH);
+    m_paintBrushPixelMirrorV->setChecked(brush.pixelMirrorV);
+    m_paintBrushPixelReplace->setChecked(brush.pixelReplaceEnabled);
+    m_paintBrushReplaceColorButton->setText(brush.pixelReplaceColor.name(QColor::HexArgb));
+    m_paintBrushReplaceColorButton->setStyleSheet(QStringLiteral("QToolButton{background:%1;color:%2;}")
+        .arg(brush.pixelReplaceColor.name(), brush.pixelReplaceColor.lightness() > 130 ? QStringLiteral("#111") : QStringLiteral("#fff")));
+
+    if (m_paintBrushPixelBox) m_paintBrushPixelBox->setVisible(pixelMode);
+    if (m_paintBrushEdgeBox) m_paintBrushEdgeBox->setVisible(!pixelMode);
+    m_paintBrushSizeSpin->setSuffix(pixelMode ? tr(" px art") : tr(" px"));
+    m_paintBrushFlowSpin->setToolTip(pixelMode
+        ? tr("Alpha uniforme por pixel artístico. Não cria suavização nas bordas.")
+        : tr("Controla quanto da textura é aplicado em cada passada. Valores baixos permitem acumular sujeira, sangue ou textura aos poucos."));
+    m_paintBrushReplaceColorButton->setEnabled(pixelMode && brush.pixelReplaceEnabled);
 
     const bool imageBrush = brush.tipMode != QLatin1String("round") && !brush.tipImage.isNull();
     const int modeIndex = m_paintBrushUseCombo->findData(brush.tipMode == QLatin1String("color")
                                                            ? QStringLiteral("color") : QStringLiteral("alpha"));
     m_paintBrushUseCombo->setCurrentIndex(qMax(0, modeIndex));
     m_paintBrushUseCombo->setEnabled(imageBrush);
+    m_paintBrushPixelShapeCombo->setEnabled(pixelMode && !imageBrush);
     m_paintBrushColorButton->setEnabled(brush.tipMode != QLatin1String("color"));
-    m_paintBrushEdgeAction->setEnabled(imageBrush);
-    const bool edgeBlendEnabled = imageBrush && brush.softenImageEdges;
+    m_paintBrushEdgeAction->setEnabled(imageBrush && !pixelMode);
+    const bool edgeBlendEnabled = !pixelMode && imageBrush && brush.softenImageEdges;
     m_paintBrushEdgeSpin->setEnabled(edgeBlendEnabled);
     m_paintBrushEdgeStrengthSpin->setEnabled(edgeBlendEnabled);
     m_paintBrushEdgeIrregularitySpin->setEnabled(edgeBlendEnabled);
@@ -2203,8 +2233,8 @@ void MainWindow::openPaintBrushSettings()
 
     auto* root = new QVBoxLayout(&dialog);
     auto* intro = new QLabel(
-        tr("Pinte livremente sem depender da grade. Você pode usar o pincel redondo ou escolher imagens da sua biblioteca. "
-           "Para texturas alpha com borda dura, use Mesclar bordas: o editor segue o contorno real da transparência, quebra a transição de forma orgânica e preserva o centro da textura."), &dialog);
+        tr("O mesmo motor de pintura atende o modo Normal e Pixel Art. Pixel Art alinha o stroke à grade de pixels, "
+           "não borra os pixels e mantém linhas contínuas, sem suavização ou coordenadas fracionárias. Máscaras e Alpha Lock usam exatamente o mesmo fluxo."), &dialog);
     intro->setWordWrap(true);
     root->addWidget(intro);
 
@@ -2214,6 +2244,11 @@ void MainWindow::openPaintBrushSettings()
     auto* form = new QFormLayout(formBox);
     body->addWidget(formBox, 1);
 
+    auto* authoringMode = new QComboBox(formBox);
+    authoringMode->addItem(tr("Pintura normal"), QStringLiteral("normal"));
+    authoringMode->addItem(tr("Pixel Art"), QStringLiteral("pixel-art"));
+    authoringMode->setCurrentIndex(qMax(0, authoringMode->findData(ed.session.rasterBrush.authoringMode)));
+
     auto* mode = new QComboBox(formBox);
     mode->addItem(tr("Redondo"), QStringLiteral("round"));
     mode->addItem(tr("Usar formato de uma imagem"), QStringLiteral("alpha"));
@@ -2222,7 +2257,10 @@ void MainWindow::openPaintBrushSettings()
 
     auto* size = new QSpinBox(formBox); size->setRange(1, 2048); size->setSuffix(tr(" px"));
     size->setValue(ed.session.rasterBrush.sizePx);
-    size->setToolTip(tr("Define o tamanho do pincel em pixels. A silhueta mostrada no mapa acompanha este tamanho."));
+    size->setToolTip(tr("Define o tamanho do pincel normal em pixels. Esse valor é preservado ao alternar para Pixel Art."));
+    auto* pixelSize = new QSpinBox(formBox); pixelSize->setRange(1, qMax(1, 2048 / qBound(1, ed.session.rasterBrush.pixelScale, 8))); pixelSize->setSuffix(tr(" px art"));
+    pixelSize->setValue(qMin(ed.session.rasterBrush.pixelSize, pixelSize->maximum()));
+    pixelSize->setToolTip(tr("Tamanho do pincel em pixels artísticos. É independente do tamanho usado no modo normal."));
     auto* opacity = new QSpinBox(formBox); opacity->setRange(1,100); opacity->setSuffix(QStringLiteral("%"));
     opacity->setValue(ed.session.rasterBrush.opacity);
     opacity->setToolTip(tr("Controla o limite máximo de transparência da pintura. 100% permite uma marca totalmente visível; valores menores deixam o resultado mais leve."));
@@ -2253,6 +2291,36 @@ void MainWindow::openPaintBrushSettings()
     blend->addItem(tr("Escurecer"), QStringLiteral("darken"));
     blend->addItem(tr("Clarear"), QStringLiteral("lighten"));
     blend->setCurrentIndex(qMax(0, blend->findData(ed.session.rasterBrush.blendMode)));
+
+    auto* pixelScale = new QSpinBox(formBox); pixelScale->setRange(1,8); pixelScale->setSuffix(QStringLiteral("x"));
+    pixelScale->setValue(ed.session.rasterBrush.pixelScale);
+    pixelScale->setToolTip(tr("Escala cada pixel artístico como um bloco inteiro, sem mudar a resolução da camada."));
+    auto* pixelShape = new QComboBox(formBox);
+    pixelShape->addItem(tr("Quadrado"), QStringLiteral("square"));
+    pixelShape->addItem(tr("Círculo pixelado"), QStringLiteral("circle"));
+    pixelShape->setCurrentIndex(qMax(0, pixelShape->findData(ed.session.rasterBrush.pixelShape)));
+    auto* pixelDither = new QComboBox(formBox);
+    pixelDither->addItem(tr("Nenhum"), QStringLiteral("none"));
+    pixelDither->addItem(tr("25%"), QStringLiteral("25"));
+    pixelDither->addItem(tr("50% (xadrez)"), QStringLiteral("50"));
+    pixelDither->addItem(tr("75%"), QStringLiteral("75"));
+    pixelDither->setCurrentIndex(qMax(0, pixelDither->findData(ed.session.rasterBrush.pixelDither)));
+    auto* pixelMirrorH = new QCheckBox(tr("Espelhar horizontal"), formBox); pixelMirrorH->setChecked(ed.session.rasterBrush.pixelMirrorH);
+    auto* pixelMirrorV = new QCheckBox(tr("Espelhar vertical"), formBox); pixelMirrorV->setChecked(ed.session.rasterBrush.pixelMirrorV);
+    auto* pixelReplace = new QCheckBox(tr("Color Replace — pintar somente sobre uma cor exata"), formBox);
+    pixelReplace->setChecked(ed.session.rasterBrush.pixelReplaceEnabled);
+    QColor replaceColor = ed.session.rasterBrush.pixelReplaceColor;
+    auto* replaceColorButton = new QPushButton(formBox);
+    auto refreshReplaceColor = [&] {
+        replaceColorButton->setText(replaceColor.name(QColor::HexArgb));
+        replaceColorButton->setStyleSheet(QStringLiteral("QPushButton{background:%1;color:%2;}")
+            .arg(replaceColor.name(), replaceColor.lightness() > 130 ? QStringLiteral("#111") : QStringLiteral("#fff")));
+    };
+    refreshReplaceColor();
+    connect(replaceColorButton, &QPushButton::clicked, &dialog, [&] {
+        const QColor picked = QColorDialog::getColor(replaceColor, &dialog, tr("Cor-alvo do Pixel Art"), QColorDialog::ShowAlphaChannel);
+        if (picked.isValid()) { replaceColor = picked; refreshReplaceColor(); }
+    });
 
     auto* softenEdges = new QCheckBox(tr("Mesclar bordas da textura"), formBox);
     softenEdges->setChecked(ed.session.rasterBrush.softenImageEdges);
@@ -2291,8 +2359,10 @@ void MainWindow::openPaintBrushSettings()
     auto* clearTip = new QPushButton(tr("Limpar"), tipRow);
     tipLayout->addWidget(tipPath,1); tipLayout->addWidget(chooseTip); tipLayout->addWidget(openTipFolder); tipLayout->addWidget(clearTip);
 
+    form->addRow(tr("Modo:"), authoringMode);
     form->addRow(tr("Tipo:"), mode);
-    form->addRow(tr("Tamanho:"), size);
+    form->addRow(tr("Tamanho normal:"), size);
+    form->addRow(tr("Tamanho Pixel Art:"), pixelSize);
     form->addRow(tr("Opacidade:"), opacity);
     form->addRow(tr("Quantidade de tinta por passada:"), flow);
     flow->setToolTip(tr("Valores baixos fazem a tinta aparecer aos poucos enquanto você passa o pincel várias vezes. Valores altos aplicam a cor mais rapidamente."));
@@ -2309,6 +2379,13 @@ void MainWindow::openPaintBrushSettings()
     form->addRow(tr("Variar tamanho:"), sizeJitter);
     form->addRow(tr("Variar rotação:"), rotationJitter);
     form->addRow(tr("Mistura:"), blend);
+    form->addRow(tr("Escala do pixel:"), pixelScale);
+    form->addRow(tr("Forma Pixel Art:"), pixelShape);
+    form->addRow(tr("Dithering:"), pixelDither);
+    form->addRow(QString(), pixelMirrorH);
+    form->addRow(QString(), pixelMirrorV);
+    form->addRow(QString(), pixelReplace);
+    form->addRow(tr("Cor-alvo:"), replaceColorButton);
     form->addRow(QString(), softenEdges);
     form->addRow(tr("Área da borda:"), edgeArea);
     form->addRow(tr("Força da mesclagem:"), edgeStrength);
@@ -2325,12 +2402,17 @@ void MainWindow::openPaintBrushSettings()
     QImage selectedTip = ed.session.rasterBrush.tipImage;
     auto currentSettings = [&] {
         RasterBrushSettings b = ed.session.rasterBrush;
-        b.sizePx = size->value(); b.opacity = opacity->value(); b.flow = flow->value();
+        b.authoringMode = authoringMode->currentData().toString();
+        b.sizePx = size->value(); b.pixelSize = pixelSize->value(); b.opacity = opacity->value(); b.flow = flow->value();
         b.hardness = hardness->value(); b.spacingPercent = spacing->value(); b.color = selectedColor;
         b.tipMode = mode->currentData().toString(); b.tipImagePath = tipPath->text(); b.tipImage = selectedTip;
         b.rotation = rotation->value(); b.rotateToStroke = rotateStroke->isChecked();
         b.scatterPercent = scatter->value(); b.sizeJitter = sizeJitter->value();
         b.rotationJitter = rotationJitter->value(); b.blendMode = blend->currentData().toString();
+        b.pixelScale = pixelScale->value(); b.pixelShape = pixelShape->currentData().toString();
+        b.pixelDither = pixelDither->currentData().toString();
+        b.pixelMirrorH = pixelMirrorH->isChecked(); b.pixelMirrorV = pixelMirrorV->isChecked();
+        b.pixelReplaceEnabled = pixelReplace->isChecked(); b.pixelReplaceColor = replaceColor;
         b.softenImageEdges = softenEdges->isChecked();
         b.edgeSoftnessPercent = edgeArea->value();
         b.edgeSoftnessStrength = edgeStrength->value();
@@ -2341,21 +2423,48 @@ void MainWindow::openPaintBrushSettings()
 
     auto refreshPreview = [&] {
         RasterBrushSettings b = currentSettings();
-        QImage canvas(220,220,QImage::Format_ARGB32_Premultiplied); canvas.fill(QColor(35,38,44));
+        QImage canvas(220,220,QImage::Format_ARGB32_Premultiplied);
+        canvas.fill(b.pixelArt() && b.pixelReplaceEnabled ? b.pixelReplaceColor : QColor(35,38,44));
         LayerPtr temp = makePaintLayer(canvas.size(), QStringLiteral("preview")); temp->image = canvas;
-        RasterBrushSettings pb = b; pb.sizePx = qMin(180, qMax(8, b.sizePx)); pb.scatterPercent = 0; pb.sizeJitter = 0; pb.rotationJitter = 0;
+        RasterBrushSettings pb = b;
+        if (b.pixelArt()) pb.pixelSize = qMin(qMax(1, b.pixelSize), qMax(1, 180 / qBound(1, b.pixelScale, 8)));
+        else pb.sizePx = qMin(180, qMax(8, b.sizePx));
+        pb.scatterPercent = 0; pb.sizeJitter = 0; pb.rotationJitter = 0;
         paint::rasterBrushDab(temp, pb, QPointF(110,110), false, 0.0);
         QPainter pp(&temp->image); pp.setPen(QPen(QColor(255,255,255,35),1)); pp.drawLine(0,110,220,110); pp.drawLine(110,0,110,220); pp.end();
         preview->setPixmap(QPixmap::fromImage(temp->image));
-        info->setText(tr("%1 px · marcas a cada %2 px · %3")
-                      .arg(b.sizePx).arg(paint::rasterBrushSpacingPx(b)).arg(mode->currentText()));
+        info->setText(b.pixelArt()
+            ? tr("%1 px art · escala %2x · footprint %3 px · Pixel Perfect")
+                  .arg(b.pixelSize).arg(b.pixelScale).arg(paint::rasterBrushFootprintPx(b))
+            : tr("%1 px · marcas a cada %2 px · %3")
+                  .arg(b.sizePx).arg(paint::rasterBrushSpacingPx(b)).arg(mode->currentText()));
+        const bool pixelMode = b.pixelArt();
+        form->setRowVisible(size, !pixelMode);
+        form->setRowVisible(pixelSize, pixelMode);
+        form->setRowVisible(pixelScale, pixelMode);
+        form->setRowVisible(pixelShape, pixelMode);
+        form->setRowVisible(pixelDither, pixelMode);
+        form->setRowVisible(pixelMirrorH, pixelMode);
+        form->setRowVisible(pixelMirrorV, pixelMode);
+        form->setRowVisible(pixelReplace, pixelMode);
+        form->setRowVisible(replaceColorButton, pixelMode);
+        replaceColorButton->setEnabled(pixelMode && pixelReplace->isChecked());
+
         const bool imageMode = b.tipMode != QLatin1String("round");
+        pixelShape->setEnabled(pixelMode && !imageMode);
         tipRow->setEnabled(true);
         clearTip->setEnabled(imageMode && !selectedTip.isNull());
-        hardness->setEnabled(!imageMode);
+        hardness->setEnabled(!pixelMode && !imageMode);
+        spacing->setEnabled(!pixelMode);
+        rotation->setEnabled(!pixelMode);
+        rotateStroke->setEnabled(!pixelMode);
+        scatter->setEnabled(!pixelMode);
+        sizeJitter->setEnabled(!pixelMode);
+        rotationJitter->setEnabled(!pixelMode);
+        blend->setEnabled(!pixelMode);
         colorButton->setEnabled(b.tipMode != QLatin1String("color"));
-        softenEdges->setEnabled(imageMode);
-        const bool canBlendEdge = imageMode && softenEdges->isChecked();
+        softenEdges->setEnabled(!pixelMode && imageMode);
+        const bool canBlendEdge = !pixelMode && imageMode && softenEdges->isChecked();
         edgeArea->setEnabled(canBlendEdge);
         edgeStrength->setEnabled(canBlendEdge);
         edgeIrregularity->setEnabled(canBlendEdge);
@@ -2379,17 +2488,28 @@ void MainWindow::openPaintBrushSettings()
     });
     connect(clearTip, &QPushButton::clicked, &dialog, [&] { selectedTip = QImage(); tipPath->clear(); mode->setCurrentIndex(mode->findData(QStringLiteral("round"))); refreshPreview(); });
 
-    for (QSpinBox* spin : {size, opacity, flow, hardness, spacing, rotation, scatter, sizeJitter, rotationJitter, edgeArea, edgeStrength, edgeIrregularity})
+    for (QSpinBox* spin : {size, pixelSize, opacity, flow, hardness, spacing, rotation, scatter, sizeJitter, rotationJitter, edgeArea, edgeStrength, edgeIrregularity})
         connect(spin, qOverload<int>(&QSpinBox::valueChanged), &dialog, [&](int){ refreshPreview(); });
+    connect(authoringMode, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&](int){ refreshPreview(); });
     connect(mode, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&](int){ refreshPreview(); });
     connect(blend, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&](int){ refreshPreview(); });
+    connect(pixelScale, qOverload<int>(&QSpinBox::valueChanged), &dialog, [&](int value){
+        pixelSize->setMaximum(qMax(1, 2048 / qBound(1, value, 8)));
+        refreshPreview();
+    });
+    connect(pixelShape, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&](int){ refreshPreview(); });
+    connect(pixelDither, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&](int){ refreshPreview(); });
+    connect(pixelMirrorH, &QCheckBox::toggled, &dialog, [&](bool){ refreshPreview(); });
+    connect(pixelMirrorV, &QCheckBox::toggled, &dialog, [&](bool){ refreshPreview(); });
+    connect(pixelReplace, &QCheckBox::toggled, &dialog, [&](bool){ refreshPreview(); });
+    connect(replaceColorButton, &QPushButton::clicked, &dialog, [&] { QTimer::singleShot(0, &dialog, refreshPreview); });
     connect(rotateStroke, &QCheckBox::toggled, &dialog, [&](bool){ refreshPreview(); });
     connect(softenEdges, &QCheckBox::toggled, &dialog, [&](bool){ refreshPreview(); });
     connect(preserveCenter, &QCheckBox::toggled, &dialog, [&](bool){ refreshPreview(); });
     connect(colorButton, &QPushButton::clicked, &dialog, [&] { QTimer::singleShot(0, &dialog, refreshPreview); });
     refreshPreview();
 
-    auto* hint = new QLabel(tr("Dica: segure Ctrl enquanto pinta para esconder/apagar usando o mesmo formato do pincel. Para sujeira e sombras, experimente Multiplicar. Para caminhos e texturas, use uma imagem e ative “Rotacionar acompanhando o traço”."), &dialog);
+    auto* hint = new QLabel(tr("Dica: Ctrl apaga com o mesmo formato. No Pixel Art, Alt captura a cor do pincel e Shift+Alt captura a cor-alvo do Color Replace. O traço permanece alinhado aos pixels e sem suavização automaticamente."), &dialog);
     hint->setWordWrap(true); root->addWidget(hint);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
@@ -2406,7 +2526,9 @@ void MainWindow::openPaintBrushSettings()
         if (m_view) m_view->update();
         refreshPaintBrushLibrary();
         syncPaintBrushToolbar();
-        statusBar()->showMessage(tr("Pincel de pintura atualizado: %1 px · %2.").arg(b.sizePx).arg(mode->currentText()), 4000);
+        statusBar()->showMessage(b.pixelArt()
+            ? tr("Pincel Pixel Art atualizado: %1 px art · escala %2x.").arg(b.pixelSize).arg(b.pixelScale)
+            : tr("Pincel de pintura atualizado: %1 px · %2.").arg(b.sizePx).arg(mode->currentText()), 4000);
         dialog.accept();
     });
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
