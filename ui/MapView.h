@@ -177,6 +177,11 @@ private:
     bool    m_rasterPainting = false;
     bool    m_rasterErasing = false;
     QPointF m_rasterLastLocal;
+    // Pixel-Perfect trabalha com um ponto de atraso: o ponto intermediário só
+    // é carimbado quando o próximo chega e confirma que ele não é redundante.
+    QPointF m_rasterPixelPerfectAnchor;
+    QPointF m_rasterPixelPerfectPending;
+    bool    m_rasterPixelPerfectPendingValid = false;
     double  m_rasterSpacingCarry = 0.0;
     core::Editor::EditSession m_rasterSession;
     QRegion m_rasterClipRegion;             ///< Alpha Lock da máscara em Tile Layer

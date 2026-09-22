@@ -165,6 +165,7 @@ private:
     QSpinBox*        m_paintBrushPixelScaleSpin = nullptr;
     QComboBox*       m_paintBrushPixelShapeCombo = nullptr;
     QComboBox*       m_paintBrushPixelDitherCombo = nullptr;
+    QCheckBox*       m_paintBrushPixelPerfect = nullptr;
     QCheckBox*       m_paintBrushPixelMirrorH = nullptr;
     QCheckBox*       m_paintBrushPixelMirrorV = nullptr;
     QCheckBox*       m_paintBrushPixelReplace = nullptr;

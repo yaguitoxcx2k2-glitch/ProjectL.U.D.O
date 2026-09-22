@@ -52,6 +52,15 @@ QRectF rasterBrushTargetRect(const RasterBrushSettings& b, const QPointF& localC
 QVector<QPointF> rasterBrushPixelLine(const RasterBrushSettings& b,
                                       const QPointF& from, const QPointF& to);
 
+/// Pixel-Perfect para traços de 1 pixel artístico. Retorna true quando o ponto
+/// intermediário forma um "L" redundante entre dois pixels diagonalmente
+/// adjacentes e deve ser omitido. Para pincéis maiores ou opção desligada,
+/// sempre retorna false.
+bool rasterBrushPixelPerfectSkipMiddle(const RasterBrushSettings& b,
+                                       const QPointF& previous,
+                                       const QPointF& middle,
+                                       const QPointF& next);
+
 /// Imagem da ponta do pincel exatamente como será carimbada, usada pela
 /// silhueta/preview sob o cursor. Não altera nenhuma camada.
 QImage rasterBrushPreviewTip(const RasterBrushSettings& b, double strokeAngleDeg = 0.0);

@@ -181,6 +181,37 @@ QVector<QPointF> rasterBrushPixelLine(const RasterBrushSettings& b,
     return out;
 }
 
+bool rasterBrushPixelPerfectSkipMiddle(const RasterBrushSettings& b,
+                                       const QPointF& previous,
+                                       const QPointF& middle,
+                                       const QPointF& next)
+{
+    if (!b.pixelPerfectActive()) return false;
+
+    const int scale = qBound(1, b.pixelScale, 8);
+    const auto logicalCell = [&b, scale](const QPointF& point) {
+        const QPointF snapped = rasterBrushSnapPoint(b, point);
+        return QPoint(int(std::floor(snapped.x() / scale)),
+                      int(std::floor(snapped.y() / scale)));
+    };
+
+    const QPoint a = logicalCell(previous);
+    const QPoint m = logicalCell(middle);
+    const QPoint c = logicalCell(next);
+    if (a == m || m == c || a == c) return false;
+
+    // A-M-C ocupam três cantos de um bloco 2x2. A e C já se tocam
+    // diagonalmente; manter M cria o "double pixel" visual.
+    const QPoint ac = c - a;
+    if (qAbs(ac.x()) != 1 || qAbs(ac.y()) != 1) return false;
+
+    const QPoint am = m - a;
+    const QPoint mc = c - m;
+    const bool firstCardinal = qAbs(am.x()) + qAbs(am.y()) == 1;
+    const bool secondCardinal = qAbs(mc.x()) + qAbs(mc.y()) == 1;
+    return firstCardinal && secondCardinal;
+}
+
 static QPainter::CompositionMode rasterBlendMode(const QString& id)
 {
     if (id == QLatin1String("multiply")) return QPainter::CompositionMode_Multiply;

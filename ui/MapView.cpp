@@ -1615,6 +1615,9 @@ void MapView::beginStroke(const QPointF& mapPos, Qt::MouseButton button, Qt::Key
         m_rasterPainting = true;
         m_rasterErasing = (mods & Qt::ControlModifier) || ed.session.heldErase || ed.session.tool == Tool::Eraser;
         m_rasterLastLocal = local;
+        m_rasterPixelPerfectAnchor = local;
+        m_rasterPixelPerfectPending = QPointF();
+        m_rasterPixelPerfectPendingValid = false;
         m_rasterSpacingCarry = 0.0;
         m_rasterUseClipRegion = false;
         m_rasterClipRegion = QRegion();
@@ -2168,6 +2171,7 @@ void MapView::mouseMoveEvent(QMouseEvent* e)
             (paintLayer->imagePaintLayer || paintLayer->alphaLock);
         if (!paintLayer || !(editingMaskNow || imagePaintNow)) {
             m_rasterPainting = false;
+            m_rasterPixelPerfectPendingValid = false;
             return;
         }
         const QPointF rawCurrent = paintLayer->type == LayerType::Image
@@ -2194,7 +2198,28 @@ void MapView::mouseMoveEvent(QMouseEvent* e)
             // dab inteiro, sem subpixel, interpolação ou buracos diagonais.
             const QVector<QPointF> points = paint::rasterBrushPixelLine(ed.session.rasterBrush,
                                                                          m_rasterLastLocal, current);
-            for (const QPointF& point : points) applyDab(point, 0.0);
+            if (ed.session.rasterBrush.pixelPerfectActive()) {
+                // Um ponto de atraso permite enxergar A-B-C antes de carimbar B.
+                // Quando A e C já são vizinhos diagonais e B só forma o canto
+                // ortogonal redundante, B é descartado ("double pixel").
+                for (const QPointF& point : points) {
+                    if (!m_rasterPixelPerfectPendingValid) {
+                        m_rasterPixelPerfectPending = point;
+                        m_rasterPixelPerfectPendingValid = true;
+                        continue;
+                    }
+                    if (!paint::rasterBrushPixelPerfectSkipMiddle(ed.session.rasterBrush,
+                                                                  m_rasterPixelPerfectAnchor,
+                                                                  m_rasterPixelPerfectPending,
+                                                                  point)) {
+                        applyDab(m_rasterPixelPerfectPending, 0.0);
+                        m_rasterPixelPerfectAnchor = m_rasterPixelPerfectPending;
+                    }
+                    m_rasterPixelPerfectPending = point;
+                }
+            } else {
+                for (const QPointF& point : points) applyDab(point, 0.0);
+            }
             m_rasterSpacingCarry = 0.0;
         } else {
             QLineF path(m_rasterLastLocal, current);
@@ -2550,6 +2575,28 @@ void MapView::endStroke(const QPointF& mapPos, Qt::KeyboardModifiers)
     }
 
     if (m_rasterPainting) {
+        // O Pixel-Perfect mantém o último ponto pendente até existir contexto
+        // suficiente para decidir se o ponto anterior era redundante. No fim
+        // do gesto, o último ponto sempre pertence ao traço e precisa ser salvo.
+        if (m_rasterPixelPerfectPendingValid && l) {
+            const bool editingMaskNow = isEditingRasterMask(ed, l);
+            QRectF finalDab;
+            if (editingMaskNow) {
+                RasterBrushSettings maskBrush = ed.session.rasterBrush;
+                maskBrush.blendMode = QStringLiteral("source-over");
+                finalDab = paint::rasterBrushDab(&l->imageMask, maskBrush,
+                                                 m_rasterPixelPerfectPending,
+                                                 m_rasterErasing, 0.0, true, false,
+                                                 m_rasterUseClipRegion ? &m_rasterClipRegion : nullptr);
+            } else {
+                finalDab = paint::rasterBrushDab(l, ed.session.rasterBrush,
+                                                 m_rasterPixelPerfectPending,
+                                                 m_rasterErasing, 0.0);
+            }
+            if (!finalDab.isEmpty())
+                ed.markLayerEditRasterDirty(m_rasterSession, finalDab.toAlignedRect(), editingMaskNow);
+        }
+        m_rasterPixelPerfectPendingValid = false;
         m_rasterPainting = false;
         m_rasterErasing = false;
         m_rasterSpacingCarry = 0.0;
