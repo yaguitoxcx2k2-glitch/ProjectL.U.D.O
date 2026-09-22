@@ -128,6 +128,56 @@ class Protocol9Architecture(unittest.TestCase):
         self.assertIn("editor.rpgMakerEngine!=core::RpgMakerEngine::MZ", exporter)
         self.assertIn("visualLayerFrameSourceRect", self.text("core/Renderer.cpp"))
 
+    def test_rpg_maker_sync_has_unsaved_authoring_barrier_and_latest_disk_merge(self):
+        exporter = self.text("ui/RpgMakerExporter.h")
+        sync = self.text("ui/RpgMakerProjectSync.cpp")
+        publication = self.text("ui/RpgMakerPublication.cpp")
+        reset = self.text("ui/RpgMakerMvReset.h")
+        self.assertIn("confirmRpgMakerSavedBeforeExternalWrite", exporter)
+        self.assertIn("RPGMZ.exe", exporter)
+        self.assertIn("JÁ SALVEI — CONTINUAR", exporter)
+        self.assertIn("engine != core::RpgMakerEngine::MZ", exporter)
+        self.assertNotIn("RPGMZ", reset)
+        self.assertNotIn("WM_CLOSE", reset)
+        self.assertIn("latestPreparedMap", exporter)
+        self.assertIn("latestMapInfos", exporter)
+        self.assertNotIn("mapWritten = copyAtomic(stagedMap, targetMapPath, error);", exporter)
+        self.assertIn("confirmRpgMakerSavedBeforeExternalWrite", sync)
+        self.assertIn("confirmRpgMakerSavedBeforeExternalWrite", publication)
+
+    def test_rpg_maker_structure_changes_are_deferred_until_explicit_sync(self):
+        sync = self.text("ui/RpgMakerProjectSync.cpp")
+        sync_h = self.text("ui/RpgMakerProjectSync.h")
+        editor_h = self.text("core/Editor.h")
+        header = self.text("core/serialization/ProjectHeaderSerializer.cpp")
+        main = self.text("ui/MainWindow.cpp")
+
+        constructor = sync[sync.index("RpgMakerProjectSync::RpgMakerProjectSync"):
+                           sync.index("bool RpgMakerProjectSync::isLinked", sync.index("RpgMakerProjectSync::RpgMakerProjectSync"))]
+        self.assertNotIn("pushStructure(&error)", constructor)
+        self.assertNotIn("m_structureDebounce", constructor)
+
+        schedule = sync[sync.index("void RpgMakerProjectSync::scheduleStructurePush"):
+                        sync.index("bool RpgMakerProjectSync::persistProjectContainer", sync.index("void RpgMakerProjectSync::scheduleStructurePush"))]
+        self.assertNotIn("pushStructure", schedule)
+        self.assertNotIn(".start()", schedule)
+        self.assertIn("refreshPendingStructureState", schedule)
+
+        delete = sync[sync.index("bool RpgMakerProjectSync::deleteMaps"):]
+        self.assertIn("rpgMakerPendingDeletedMapIds.insert", delete)
+        self.assertNotIn("QFile::remove", delete)
+        self.assertNotIn("writeMapInfos", delete)
+
+        self.assertIn("rpgMakerStructurePending", editor_h)
+        self.assertIn("rpgMakerPendingDeletedMapIds", editor_h)
+        self.assertIn('"rpgMakerStructurePending"', header)
+        self.assertIn('"rpgMakerPendingDeletedMapIds"', header)
+        self.assertIn("hasPendingStructure() const", sync_h)
+        self.assertIn('QStringLiteral("  ●")', main)
+        publication = self.text("ui/RpgMakerPublication.cpp")
+        self.assertIn('"rpgMakerStructurePending"', publication)
+        self.assertIn('"rpgMakerPendingDeletedMapIds"', publication)
+
     def test_layer_multi_selection_is_one_editor_state(self):
         editor = self.text("core/Editor.cpp")
         panel = self.text("ui/LayerPanel.cpp")

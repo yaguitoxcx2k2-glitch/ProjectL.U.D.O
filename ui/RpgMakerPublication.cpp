@@ -36,7 +36,8 @@ QJsonValue canonical(const QJsonValue& value) {
     return result;
 }
 QJsonObject publicationSnapshot(QJsonObject payload) {
-    for(const auto& key:{"activeMapDocIdx","rpgMakerProjectRoot","assetDatabase","assetReferences","editorVersion"})payload.remove(key);
+    for(const auto& key:{"activeMapDocIdx","rpgMakerProjectRoot","rpgMakerStructurePending",
+                        "rpgMakerPendingDeletedMapIds","assetDatabase","assetReferences","editorVersion"})payload.remove(key);
     return canonical(payload).toObject();
 }
 bool readJson(const QString& path,QJsonDocument& result) {
@@ -120,7 +121,8 @@ void runRpgMakerPublication(core::Editor& ed,QWidget* parent,CollaborationClient
     const auto payload=core::io::buildProjectPayload(ed);
     const auto reviewed=publicationSnapshot(payload);
     auto shared=payload;
-    for(const auto& key:{"maps","activeMapDocIdx","rpgMakerProjectRoot","assetDatabase","assetReferences","editorVersion"})shared.remove(key);
+    for(const auto& key:{"maps","activeMapDocIdx","rpgMakerProjectRoot","rpgMakerStructurePending",
+                        "rpgMakerPendingDeletedMapIds","assetDatabase","assetReferences","editorVersion"})shared.remove(key);
     const bool fitGrid=settings.value(settingsPrefix+QStringLiteral("/referenceFitGrid"),false).toBool();
     shared["publicationReferenceFitGrid"]=fitGrid;
     shared["publicationFormat"]=1;
@@ -189,6 +191,7 @@ void runRpgMakerPublication(core::Editor& ed,QWidget* parent,CollaborationClient
     QSet<int> selected;
     for(int i=0;i<entries.size();++i)if(table.item(i,0)->checkState()==Qt::Checked)selected.insert(entries[i].target);
     if(selected.isEmpty())return;
+    if(!rpgMaker::confirmRpgMakerSavedBeforeExternalWrite(parent,ed.rpgMakerEngine,root))return;
     for(const auto& e:entries)if(selected.contains(e.target)&&e.parent>0&&!selected.contains(e.parent)&&!QFileInfo::exists(QDir(root).filePath("data/"+rpgMaker::mapJsonName(e.parent)))) {
         QMessageBox::information(parent,QObject::tr("Selecione o mapa pai"),QObject::tr("O mapa pai de %1 ainda não existe no jogo. Selecione-o também.").arg(e.name));return;
     }
@@ -220,7 +223,7 @@ void runRpgMakerPublication(core::Editor& ed,QWidget* parent,CollaborationClient
         message.setText(QObject::tr("Atualizando %1…").arg(e.name));progress.repaint();
         if(failedIds.contains(e.parent)){failures<<e.name+QObject::tr(": o mapa pai falhou");failedIds.insert(e.target);continue;}
         const auto* doc=frozen.mapById(e.id);if(!doc){failures<<e.name;failedIds.insert(e.target);continue;}
-        if(!rpgMaker::exportBoundMap(frozen,*doc,root,e.target,fitGrid,parent,false,e.parent)) {
+        if(!rpgMaker::exportBoundMap(frozen,*doc,root,e.target,fitGrid,parent,false,e.parent,true)) {
             failures<<e.name;failedIds.insert(e.target);continue;
         }
         QJsonObject record{{"target",e.target},{"fingerprint",e.fingerprint},{"teamRevision",revision},{"publishedAt",QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}};

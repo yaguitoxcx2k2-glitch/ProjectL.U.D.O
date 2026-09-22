@@ -4,6 +4,10 @@
 #include "core/RpgMakerTarget.h"
 #include "core/Version.h"
 
+#include <QJsonArray>
+#include <QList>
+#include <algorithm>
+
 namespace core::serialization {
 
 QJsonObject writeProjectHeader(const Editor& editor)
@@ -20,6 +24,16 @@ QJsonObject writeProjectHeader(const Editor& editor)
     root[QStringLiteral("projectId")] = editor.projectId;
     if (!editor.rpgMakerProjectRoot.isEmpty())
         root[QStringLiteral("rpgMakerProjectRoot")] = editor.rpgMakerProjectRoot;
+    if (editor.rpgMakerStructurePending)
+        root[QStringLiteral("rpgMakerStructurePending")] = true;
+    if (!editor.rpgMakerPendingDeletedMapIds.isEmpty()) {
+        QJsonArray pendingDeletes;
+        QList<int> ids = editor.rpgMakerPendingDeletedMapIds.values();
+        std::sort(ids.begin(), ids.end());
+        for (int id : ids) if (id > 0) pendingDeletes.append(id);
+        if (!pendingDeletes.isEmpty())
+            root[QStringLiteral("rpgMakerPendingDeletedMapIds")] = pendingDeletes;
+    }
     root[QStringLiteral("activeMapDocIdx")] = qMax(0, editor.activeDocIdx);
     return root;
 }
@@ -32,6 +46,13 @@ void applyProjectIdentity(Editor& editor, const QJsonObject& root)
         root.value(QStringLiteral("projectKind")).toString());
     editor.rpgMakerEngine = rpgMakerEngineFromId(engineToken, RpgMakerEngine::MZ);
     editor.rpgMakerProjectRoot = root.value(QStringLiteral("rpgMakerProjectRoot")).toString();
+    editor.rpgMakerStructurePending = root.value(QStringLiteral("rpgMakerStructurePending")).toBool(false);
+    editor.rpgMakerPendingDeletedMapIds.clear();
+    for (const QJsonValue& value : root.value(QStringLiteral("rpgMakerPendingDeletedMapIds")).toArray()) {
+        const int id = value.toInt();
+        if (id > 0) editor.rpgMakerPendingDeletedMapIds.insert(id);
+    }
+    if (!editor.rpgMakerPendingDeletedMapIds.isEmpty()) editor.rpgMakerStructurePending = true;
 }
 
 } // namespace core::serialization

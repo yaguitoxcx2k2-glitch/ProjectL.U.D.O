@@ -289,9 +289,9 @@ MainWindow::MainWindow(Editor& editorRef, QWidget* parent)
         if (m_minimap) m_minimap->update();
     });
 
-    // Fase 9: MapInfos.json passa a ser uma árvore compartilhada entre o
-    // LUDO e o RPG Maker selecionado. O sincronizador observa alterações externas e
-    // também atribui Map IDs automaticamente para novos mapas do LUDO.
+    // Fase 9: MapInfos.json continua sendo uma árvore compartilhada, mas
+    // alterações estruturais LOCAIS ficam pendentes até uma sincronização
+    // explícita. Isso evita recargas inesperadas no RPG Maker durante a edição.
     m_rpgMakerSync = new RpgMakerProjectSync(ed, this, this);
     m_rpgMakerSync->setStatusHandler([this](const QString& text) {
         statusBar()->showMessage(text, 6000);
@@ -1453,7 +1453,8 @@ void MainWindow::refreshMapTabs()
         const MapDoc& d = ed.docs.at(docIndex);
         const QString rpgMakerLabel = d.rpgMakerMapId > 0
             ? QStringLiteral("MAP%1 · %2").arg(d.rpgMakerMapId, 3, 10, QLatin1Char('0')).arg(d.name)
-            : d.name;
+            : (m_rpgMakerSync && m_rpgMakerSync->isLinked()
+                   ? QStringLiteral("● %1").arg(d.name) : d.name);
         const int tab = m_mapTabs->addTab(d.dirty ? rpgMakerLabel + QStringLiteral(" •") : rpgMakerLabel);
         m_mapTabs->setTabData(tab, d.id);
         m_mapTabs->setTabToolTip(tab, tr("Mapa aberto: %1").arg(d.name));
@@ -1486,7 +1487,13 @@ void MainWindow::refreshMapTree()
     QSignalBlocker bloqueio(m_mapTree);
     m_mapTree->clear();
     auto* raiz = new QTreeWidgetItem(m_mapTree);
-    raiz->setText(0, ed.projectName.isEmpty() ? tr("Projeto") : ed.projectName);
+    QString rootLabel = ed.projectName.isEmpty() ? tr("Projeto") : ed.projectName;
+    const bool structurePending = m_rpgMakerSync && m_rpgMakerSync->hasPendingStructure();
+    if (structurePending) rootLabel += QStringLiteral("  ●");
+    raiz->setText(0, rootLabel);
+    raiz->setToolTip(0, structurePending
+        ? tr("Há alterações da árvore ainda não enviadas ao RPG Maker. Use Salvar/Atualizar RPG Maker quando estiver pronto.")
+        : QString());
     raiz->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
     Qt::ItemFlags raizFlags = raiz->flags();
     raizFlags.setFlag(Qt::ItemIsDropEnabled, true);
@@ -1503,7 +1510,8 @@ void MainWindow::refreshMapTree()
             ? tr("Variação") : variation.variationName.trimmed();
         const QString rpgMakerLabel = variation.rpgMakerMapId > 0
             ? QStringLiteral("↳ MAP%1 · %2").arg(variation.rpgMakerMapId, 3, 10, QLatin1Char('0')).arg(label)
-            : QStringLiteral("↳ %1").arg(label);
+            : (m_rpgMakerSync && m_rpgMakerSync->isLinked()
+                   ? QStringLiteral("↳ ● %1").arg(label) : QStringLiteral("↳ %1").arg(label));
         item->setText(0, variation.dirty ? rpgMakerLabel + QStringLiteral(" •") : rpgMakerLabel);
         item->setData(0, MapIdRole, variation.id);
         item->setData(0, MapVariationRole, true);
@@ -1534,7 +1542,8 @@ void MainWindow::refreshMapTree()
         auto* item = new QTreeWidgetItem(pai);
         const QString rpgMakerLabel = d.rpgMakerMapId > 0
             ? QStringLiteral("MAP%1 · %2").arg(d.rpgMakerMapId, 3, 10, QLatin1Char('0')).arg(d.name)
-            : d.name;
+            : (m_rpgMakerSync && m_rpgMakerSync->isLinked()
+                   ? QStringLiteral("● %1").arg(d.name) : d.name);
         item->setText(0, d.dirty ? rpgMakerLabel + QStringLiteral(" •") : rpgMakerLabel);
         item->setData(0, MapIdRole, d.id);
         item->setData(0, MapVariationRole, false);
@@ -3135,7 +3144,9 @@ void MainWindow::requestDeleteMap(const QString& mapId)
     emit ed.mapChanged();
     refreshMapTabs();
     if (const MapDoc* active = ed.doc()) restoreViewport(active->id);
-    statusBar()->showMessage(tr("Mapa removido do projeto com política estrutural explícita."), 4000);
+    statusBar()->showMessage(m_rpgMakerSync && m_rpgMakerSync->hasPendingStructure()
+        ? tr("Mapa removido do LUDO. A exclusão no RPG Maker está pendente até a próxima sincronização.")
+        : tr("Mapa removido do projeto com política estrutural explícita."), 5000);
 }
 
 // ------------------------------------------------------------------ misc

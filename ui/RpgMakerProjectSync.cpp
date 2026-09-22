@@ -107,8 +107,6 @@ RpgMakerProjectSync::RpgMakerProjectSync(core::Editor& editor, QWidget* owner, Q
 {
     m_externalDebounce.setSingleShot(true);
     m_externalDebounce.setInterval(250);
-    m_structureDebounce.setSingleShot(true);
-    m_structureDebounce.setInterval(180);
 
     connect(&m_watcher, &QFileSystemWatcher::fileChanged, this, [this] {
         m_externalDebounce.start();
@@ -117,15 +115,10 @@ RpgMakerProjectSync::RpgMakerProjectSync(core::Editor& editor, QWidget* owner, Q
         m_externalDebounce.start();
     });
     connect(&m_externalDebounce, &QTimer::timeout, this, [this] { onExternalChange(); });
-    connect(&m_structureDebounce, &QTimer::timeout, this, [this] {
-        if (m_syncing || !isLinked()) return;
-        if (structureSignature() == m_lastStructureSignature) return;
-        QString error;
-        if (!pushStructure(&error)) notifyStatus(tr("Sincronização %1: %2").arg(core::rpgMakerEngineName(ed.rpgMakerEngine), error));
-    });
 
-    // docsChanged também ocorre ao trocar a aba ativa; a assinatura estrutural
-    // impede escritas desnecessárias nesse caso.
+    // Mudanças locais de estrutura nunca escrevem no RPG Maker automaticamente.
+    // docsChanged também ocorre ao trocar a aba ativa; a assinatura abaixo
+    // diferencia navegação de criar/renomear/mover/excluir mapas.
     connect(&ed, &core::Editor::docsChanged, this, [this] { scheduleStructurePush(); });
 }
 
@@ -203,6 +196,8 @@ bool RpgMakerProjectSync::linkProjectInteractive()
             d.rpgMakerMapId = 0;
             d.rpgMakerImported = false;
         }
+        ed.rpgMakerPendingDeletedMapIds.clear();
+        ed.rpgMakerStructurePending = true;
     }
 
     ed.projectDirty = true;
@@ -215,16 +210,14 @@ bool RpgMakerProjectSync::linkProjectInteractive()
         QMessageBox::warning(m_owner, tr("Sincronização %1").arg(core::rpgMakerEngineName(ed.rpgMakerEngine)), error);
         return false;
     }
-    bool hasUnboundLocalMap = false;
-    for (const core::MapDoc& d : std::as_const(ed.docs)) {
-        if (d.rpgMakerMapId <= 0 && !d.rpgMakerImported) { hasUnboundLocalMap = true; break; }
-    }
-    if (hasUnboundLocalMap && !pushStructure(&error)) {
-        QMessageBox::warning(m_owner, tr("Sincronização %1").arg(core::rpgMakerEngineName(ed.rpgMakerEngine)), error);
-        return false;
-    }
+    // Não publicamos mapas locais sem ID durante o vínculo. Eles ficam pendentes
+    // até Salvar/Atualizar RPG Maker, para o editor externo nunca receber uma
+    // mudança estrutural surpresa no meio da edição.
+    refreshPendingStructureState();
     armWatcher();
-    notifyStatus(tr("Projeto %1 vinculado. A árvore foi recebida com sincronização segura.").arg(engineName));
+    notifyStatus(ed.rpgMakerStructurePending
+        ? tr("Projeto %1 vinculado. Há alterações de estrutura pendentes para o RPG Maker.").arg(engineName)
+        : tr("Projeto %1 vinculado. A árvore foi recebida com sincronização segura.").arg(engineName));
     return true;
 }
 
@@ -353,13 +346,74 @@ bool RpgMakerProjectSync::writeMapInfos(const QJsonArray& infos, QString* error)
 QByteArray RpgMakerProjectSync::structureSignature() const
 {
     QByteArray sig;
+    auto tokenFor = [this](const core::MapDoc& d) {
+        return d.rpgMakerMapId > 0
+            ? QByteArrayLiteral("M") + QByteArray::number(d.rpgMakerMapId)
+            : QByteArrayLiteral("L") + d.id.toUtf8();
+    };
     for (const core::MapDoc& d : ed.docs) {
-        sig += d.id.toUtf8(); sig += '|';
-        sig += QByteArray::number(d.rpgMakerMapId); sig += '|';
+        QByteArray parent;
+        if (!d.parentId.isEmpty()) {
+            const core::MapDoc* p = ed.mapById(d.parentId);
+            if (p) parent = tokenFor(*p);
+        }
+        sig += tokenFor(d); sig += '|';
         sig += d.name.toUtf8(); sig += '|';
-        sig += d.parentId.toUtf8(); sig += '\n';
+        sig += parent; sig += '\n';
     }
     return hashBytes(sig);
+}
+
+QByteArray RpgMakerProjectSync::rpgMakerStructureSignature(const QJsonArray& infos) const
+{
+    struct ExternalMap { int id = 0; int order = 0; QString name; int parentId = 0; };
+    QVector<ExternalMap> maps;
+    for (int id = 1; id < infos.size(); ++id) {
+        if (!infos.at(id).isObject() || ed.rpgMakerPendingDeletedMapIds.contains(id)) continue;
+        const QJsonObject info = infos.at(id).toObject();
+        maps.push_back({id, info.value(QStringLiteral("order")).toInt(id),
+                        info.value(QStringLiteral("name")).toString(),
+                        info.value(QStringLiteral("parentId")).toInt(0)});
+    }
+    std::stable_sort(maps.begin(), maps.end(), [](const ExternalMap& a, const ExternalMap& b) {
+        if (a.order != b.order) return a.order < b.order;
+        return a.id < b.id;
+    });
+    QByteArray sig;
+    for (const ExternalMap& map : std::as_const(maps)) {
+        sig += QByteArrayLiteral("M") + QByteArray::number(map.id); sig += '|';
+        sig += map.name.toUtf8(); sig += '|';
+        if (map.parentId > 0) sig += QByteArrayLiteral("M") + QByteArray::number(map.parentId);
+        sig += '\n';
+    }
+    return hashBytes(sig);
+}
+
+void RpgMakerProjectSync::refreshPendingStructureState(const QJsonArray* knownInfos)
+{
+    QByteArray externalSignature = m_lastStructureSignature;
+    QJsonArray loadedInfos;
+    if (knownInfos) {
+        externalSignature = rpgMakerStructureSignature(*knownInfos);
+    } else if (externalSignature.isEmpty() && isLinked() && loadMapInfos(loadedInfos, nullptr)) {
+        // Só consulta o disco quando ainda não existe baseline. Em uso normal,
+        // docsChanged pode disparar ao trocar de aba e deve continuar barato.
+        externalSignature = rpgMakerStructureSignature(loadedInfos);
+    }
+    if (!externalSignature.isEmpty()) m_lastStructureSignature = externalSignature;
+
+    const bool pending = !ed.rpgMakerPendingDeletedMapIds.isEmpty() ||
+                         (!m_lastStructureSignature.isEmpty() && structureSignature() != m_lastStructureSignature);
+    if (ed.rpgMakerStructurePending == pending) return;
+    ed.rpgMakerStructurePending = pending;
+    ed.projectDirty = true;
+    emit ed.projectChanged();
+    notifyModelChanged();
+}
+
+bool RpgMakerProjectSync::hasPendingStructure() const
+{
+    return ed.rpgMakerStructurePending || !ed.rpgMakerPendingDeletedMapIds.isEmpty();
 }
 
 int RpgMakerProjectSync::firstFreeMapId(const QJsonArray& infos, const QSet<int>& reserved) const
@@ -454,6 +508,7 @@ bool RpgMakerProjectSync::pullStructure(bool importNewMaps, QString* error)
 {
     QJsonArray infos;
     if (!loadMapInfos(infos, error)) return false;
+    const bool preserveLocalStructure = hasPendingStructure();
     m_syncing = true;
 
     QHash<int, QString> docIdByRpgMakerId;
@@ -462,7 +517,7 @@ bool RpgMakerProjectSync::pullStructure(bool importNewMaps, QString* error)
 
     bool changed = false;
     for (int id = 1; id < infos.size(); ++id) {
-        if (!infos.at(id).isObject()) continue;
+        if (!infos.at(id).isObject() || ed.rpgMakerPendingDeletedMapIds.contains(id)) continue;
         const QJsonObject info = infos.at(id).toObject();
         core::MapDoc* existing = nullptr;
         for (core::MapDoc& d : ed.docs)
@@ -500,12 +555,15 @@ bool RpgMakerProjectSync::pullStructure(bool importNewMaps, QString* error)
             for (const auto& layer : existing->layers) inspect(layer);
             const bool externalMapChanged = m_pendingExternalMapIds.contains(id);
             if (existing->rpgMakerImported && (!visual || externalMapChanged)) {
-                const QString keepId=existing->id, keepParent=existing->parentId;
+                const QString keepId=existing->id, keepParent=existing->parentId, keepName=existing->name;
                 *existing=importRpgMakerMap(id,info,error);
-                existing->id=keepId;existing->parentId=keepParent;changed=true;
+                existing->id=keepId;
+                if (preserveLocalStructure) { existing->parentId=keepParent; existing->name=keepName; }
+                else existing->parentId=keepParent;
+                changed=true;
             }
             const QString rpgMakerName = info.value(QStringLiteral("name")).toString().trimmed();
-            if (!rpgMakerName.isEmpty() && existing->name != rpgMakerName) {
+            if (!preserveLocalStructure && !rpgMakerName.isEmpty() && existing->name != rpgMakerName) {
                 existing->name = rpgMakerName;
                 changed = true;
             }
@@ -521,11 +579,11 @@ bool RpgMakerProjectSync::pullStructure(bool importNewMaps, QString* error)
         if (d.rpgMakerMapId > 0) docIdByRpgMakerId.insert(d.rpgMakerMapId, d.id);
 
     for (int id = 1; id < infos.size(); ++id) {
-        if (!infos.at(id).isObject()) continue;
+        if (!infos.at(id).isObject() || ed.rpgMakerPendingDeletedMapIds.contains(id)) continue;
         core::MapDoc* d = nullptr;
         for (core::MapDoc& candidate : ed.docs)
             if (candidate.rpgMakerMapId == id) { d = &candidate; break; }
-        if (!d || d->dirty) continue;
+        if (!d || d->dirty || preserveLocalStructure) continue;
         const int parentRpgMakerId = infos.at(id).toObject().value(QStringLiteral("parentId")).toInt(0);
         const QString wantedParent = docIdByRpgMakerId.value(parentRpgMakerId);
         if (d->parentId != wantedParent) {
@@ -542,10 +600,12 @@ bool RpgMakerProjectSync::pullStructure(bool importNewMaps, QString* error)
     const QString activeId = ed.doc() ? ed.doc()->id : QString();
     QStringList beforeOrder;
     for (const core::MapDoc& d : std::as_const(ed.docs)) beforeOrder.push_back(d.id);
-    std::stable_sort(ed.docs.begin(), ed.docs.end(), [&](const core::MapDoc& a, const core::MapDoc& b) {
-        return orderById.value(a.rpgMakerMapId, 100000 + qMax(0, a.rpgMakerMapId)) <
-               orderById.value(b.rpgMakerMapId, 100000 + qMax(0, b.rpgMakerMapId));
-    });
+    if (!preserveLocalStructure) {
+        std::stable_sort(ed.docs.begin(), ed.docs.end(), [&](const core::MapDoc& a, const core::MapDoc& b) {
+            return orderById.value(a.rpgMakerMapId, 100000 + qMax(0, a.rpgMakerMapId)) <
+                   orderById.value(b.rpgMakerMapId, 100000 + qMax(0, b.rpgMakerMapId));
+        });
+    }
     QStringList afterOrder;
     for (const core::MapDoc& d : std::as_const(ed.docs)) afterOrder.push_back(d.id);
     if (beforeOrder != afterOrder) changed = true;
@@ -564,7 +624,8 @@ bool RpgMakerProjectSync::pullStructure(bool importNewMaps, QString* error)
     }
 
     m_syncing = false;
-    m_lastStructureSignature = structureSignature();
+    m_lastStructureSignature = rpgMakerStructureSignature(infos);
+    refreshPendingStructureState(&infos);
     refreshDiskBaseline();
     return true;
 }
@@ -668,20 +729,67 @@ bool RpgMakerProjectSync::pushStructure(QString* error)
         }
     }
 
+    // Exclusões também fazem parte da mesma transação estrutural. Enquanto estão
+    // pendentes, o MapXXX continua intocado no RPG Maker. Só aqui, depois da
+    // confirmação explícita do usuário, preparamos backup e removemos da árvore.
+    QSet<int> activeIds;
+    for (const core::MapDoc& d : std::as_const(ed.docs))
+        if (d.rpgMakerMapId > 0) activeIds.insert(d.rpgMakerMapId);
+
+    QVector<int> deleteAfterMapInfos;
+    QSet<int> canceledDeletes;
+    const QString deletedBackupDir = QDir(projectRoot()).filePath(QStringLiteral("data/ludoMaps/backups/deleted"));
+    for (int id : std::as_const(ed.rpgMakerPendingDeletedMapIds)) {
+        if (id <= 0) continue;
+        if (activeIds.contains(id)) {
+            canceledDeletes.insert(id);
+            continue;
+        }
+        const QString mapPath = mapFilePath(projectRoot(), id);
+        if (QFileInfo::exists(mapPath)) {
+            QDir().mkpath(deletedBackupDir);
+            const QString backupPath = QDir(deletedBackupDir).filePath(
+                rpgMaker::mapJsonName(id) + QStringLiteral(".before-delete"));
+            QString backupError;
+            if (!rpgMaker::copyAtomic(mapPath, backupPath, backupError)) {
+                m_syncing = false;
+                if (error) *error = backupError;
+                return false;
+            }
+        }
+        if (id < infos.size()) infos[id] = QJsonValue(QJsonValue::Null);
+        deleteAfterMapInfos.push_back(id);
+    }
+
     if (!writeMapInfos(infos, error)) {
         m_syncing = false;
         return false;
     }
 
-    if (assigned) {
+    QStringList removeWarnings;
+    for (int id : std::as_const(deleteAfterMapInfos)) {
+        const QString mapPath = mapFilePath(projectRoot(), id);
+        if (QFileInfo::exists(mapPath) && !QFile::remove(mapPath))
+            removeWarnings << tr("Não foi possível remover %1; ele ficou órfão, mas fora de MapInfos.json.")
+                                  .arg(rpgMaker::mapJsonName(id));
+        ed.rpgMakerPendingDeletedMapIds.remove(id);
+    }
+    for (int id : std::as_const(canceledDeletes)) ed.rpgMakerPendingDeletedMapIds.remove(id);
+
+    const bool metadataChanged = assigned || !deleteAfterMapInfos.isEmpty() || !canceledDeletes.isEmpty() ||
+                                 ed.rpgMakerStructurePending;
+    ed.rpgMakerStructurePending = false;
+    if (metadataChanged) {
         ed.projectDirty = true;
-        emit ed.docsChanged();
+        if (assigned) emit ed.docsChanged();
         emit ed.projectChanged();
+        notifyModelChanged();
     }
     m_lastStructureSignature = structureSignature();
     m_syncing = false;
     refreshDiskBaseline();
     armWatcher();
+    if (!removeWarnings.isEmpty()) notifyStatus(removeWarnings.join(QLatin1Char(' ')));
     return true;
 }
 
@@ -689,20 +797,30 @@ bool RpgMakerProjectSync::synchronizeNow(bool importNewMaps)
 {
     QString error;
     if (!ensureLinked(&error)) return false;
+    if (!rpgMaker::confirmRpgMakerSavedBeforeExternalWrite(m_owner, ed.rpgMakerEngine, projectRoot()))
+        return false;
     if (!pullStructure(importNewMaps, &error) || !pushStructure(&error)) {
+        QMessageBox::warning(m_owner, tr("Sincronização %1").arg(core::rpgMakerEngineName(ed.rpgMakerEngine)), error);
+        return false;
+    }
+    if (!ed.projectPath.isEmpty() && !persistProjectContainer(&error)) {
         QMessageBox::warning(m_owner, tr("Sincronização %1").arg(core::rpgMakerEngineName(ed.rpgMakerEngine)), error);
         return false;
     }
     notifyModelChanged();
     notifyStatus(ed.rpgMakerEngine == core::RpgMakerEngine::MV
                      ? tr("Projeto MV sincronizado em disco. Se o RPG Maker MV estiver aberto, reabra o projeto nele para carregar as alterações externas.")
-                     : tr("Árvore de mapas sincronizada nos dois sentidos com proteção não destrutiva."));
+                     : tr("Alterações pendentes foram enviadas ao RPG Maker MZ."));
     return true;
 }
 
 void RpgMakerProjectSync::scheduleStructurePush()
 {
-    if (!m_syncing && isLinked()) m_structureDebounce.start();
+    if (m_syncing || !isLinked()) return;
+    const bool wasPending = hasPendingStructure();
+    refreshPendingStructureState();
+    if (!wasPending && hasPendingStructure())
+        notifyStatus(tr("Alterações da árvore pendentes. Salve/Atualize o RPG Maker para enviá-las."));
 }
 
 bool RpgMakerProjectSync::persistProjectContainer(QString* error)
@@ -719,10 +837,12 @@ void RpgMakerProjectSync::publishProject(CollaborationClient* team)
     if(m_syncing)return;
     {
         QScopedValueRollback<bool> guard(m_syncing,true);
-        m_structureDebounce.stop();m_externalDebounce.stop();
+        m_externalDebounce.stop();
         runRpgMakerPublication(ed,m_owner,team);
     }
-    m_lastStructureSignature=structureSignature();
+    QJsonArray infos;
+    if (loadMapInfos(infos, nullptr)) refreshPendingStructureState(&infos);
+    else refreshPendingStructureState();
     refreshDiskBaseline();
     armWatcher();
 }
@@ -732,6 +852,10 @@ bool RpgMakerProjectSync::saveAllDirtyMaps()
 {
     QString error;
     if (!ensureLinked(&error)) return false;
+    // Um único preflight por operação evita um alerta por mapa e impede que o
+    // LUDO sobrescreva dados que ainda existam apenas na memória do RPG Maker.
+    if (!rpgMaker::confirmRpgMakerSavedBeforeExternalWrite(m_owner, ed.rpgMakerEngine, projectRoot()))
+        return false;
     if (!pushStructure(&error)) {
         QMessageBox::warning(m_owner, tr("Salvar mapas"), error);
         return false;
@@ -745,7 +869,7 @@ bool RpgMakerProjectSync::saveAllDirtyMaps()
         // flags dirty. O vínculo RPG Maker usa o estado confirmado inteiro;
         // o exportador atômico evita arquivos parcialmente atualizados.
         if (d.rpgMakerMapId <= 0) continue;
-        if (!rpgMaker::exportBoundMap(ed, d, projectRoot(), d.rpgMakerMapId, fitGrid, m_owner, false)) {
+        if (!rpgMaker::exportBoundMap(ed, d, projectRoot(), d.rpgMakerMapId, fitGrid, m_owner, false, -1, true)) {
             m_syncing = false;
             return false;
         }
@@ -768,27 +892,22 @@ bool RpgMakerProjectSync::saveAllDirtyMaps()
 
 bool RpgMakerProjectSync::deleteMaps(const QVector<int>& rpgMakerMapIds, QString* error)
 {
-    if (!isLinked() || rpgMakerMapIds.isEmpty()) return true;
-    QJsonArray infos;
-    if (!loadMapInfos(infos, error)) return false;
+    Q_UNUSED(error);
+    if (rpgMakerMapIds.isEmpty()) return true;
 
-    const QString backupDir = QDir(projectRoot()).filePath(QStringLiteral("data/ludoMaps/backups/deleted"));
-    QDir().mkpath(backupDir);
+    bool queued = false;
     for (int id : rpgMakerMapIds) {
         if (id <= 0) continue;
-        if (id < infos.size()) infos[id] = QJsonValue(QJsonValue::Null);
-        const QString path = mapFilePath(projectRoot(), id);
-        if (QFileInfo::exists(path)) {
-            const QString backup = QDir(backupDir).filePath(
-                rpgMaker::mapJsonName(id) + QStringLiteral(".before-delete"));
-            if (!QFileInfo::exists(backup)) QFile::copy(path, backup);
-            QFile::remove(path);
-        }
+        ed.rpgMakerPendingDeletedMapIds.insert(id);
+        queued = true;
     }
-    if (!writeMapInfos(infos, error)) return false;
-    refreshDiskBaseline();
-    armWatcher();
-    notifyStatus(tr("Mapa(s) removido(s) também da árvore do %1.").arg(core::rpgMakerEngineName(ed.rpgMakerEngine)));
+    if (!queued) return true;
+
+    ed.rpgMakerStructurePending = true;
+    ed.projectDirty = true;
+    emit ed.projectChanged();
+    notifyModelChanged();
+    notifyStatus(tr("Exclusão de mapa pendente. O RPG Maker só será alterado ao salvar/atualizar explicitamente."));
     return true;
 }
 

@@ -35,6 +35,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QProgressDialog>
+#include <QProcess>
 #include <QRegularExpression>
 #include <QPushButton>
 #include <QSaveFile>
@@ -211,6 +212,75 @@ inline bool isRpgMakerProjectRoot(const QString& path, core::RpgMakerEngine engi
         return false;
     }
     return true;
+}
+
+inline bool isRpgMakerEditorRunning(core::RpgMakerEngine engine)
+{
+#ifdef Q_OS_WIN
+    const QString imageName = engine == core::RpgMakerEngine::MV
+        ? QStringLiteral("RPGMV.exe")
+        : QStringLiteral("RPGMZ.exe");
+
+    QProcess taskList;
+    taskList.start(QStringLiteral("tasklist"),
+                   {QStringLiteral("/FI"),
+                    QStringLiteral("IMAGENAME eq %1").arg(imageName),
+                    QStringLiteral("/NH")});
+    if (!taskList.waitForStarted(750)) return false;
+    if (!taskList.waitForFinished(1500)) {
+        taskList.kill();
+        taskList.waitForFinished(250);
+        return false;
+    }
+
+    const QString output = QString::fromLocal8Bit(taskList.readAllStandardOutput());
+    return output.contains(imageName, Qt::CaseInsensitive);
+#else
+    Q_UNUSED(engine);
+    return false;
+#endif
+}
+
+// O LUDO e o editor do RPG Maker são dois processos diferentes. Alterações ainda
+// não salvas no RPG Maker existem apenas na memória dele; portanto não há como o
+// LUDO preservá-las lendo MapXXX.json. Quando o editor externo está aberto,
+// exigimos uma confirmação de save antes de tocar nos JSONs compartilhados.
+inline bool confirmRpgMakerSavedBeforeExternalWrite(QWidget* parent,
+                                                     core::RpgMakerEngine engine,
+                                                     const QString& rootPath)
+{
+    // O MV mantém o fluxo histórico de reset próprio. Este lembrete existe
+    // somente no MZ, onde não tentamos fechar, focar ou reiniciar o editor.
+    if (engine != core::RpgMakerEngine::MZ || !parent ||
+        !isRpgMakerProjectRoot(rootPath, engine) || !isRpgMakerEditorRunning(engine))
+        return true;
+
+    QMessageBox box(parent);
+    box.setIcon(QMessageBox::Warning);
+    box.setWindowTitle(QStringLiteral("SALVE O RPG MAKER MZ ANTES DE CONTINUAR"));
+    box.setTextFormat(Qt::RichText);
+    box.setText(
+        QStringLiteral("<div style='font-size:24pt; font-weight:700;'>"
+                       "SALVE O PROJETO NO RPG MAKER MZ"
+                       "</div>"));
+    box.setInformativeText(
+        QStringLiteral("<div style='font-size:14pt; line-height:1.35;'>"
+                       "Antes de o LUDO atualizar o mapa, <b>salve o projeto no RPG Maker MZ</b>.<br><br>"
+                       "Alterações ainda não salvas — como <b>posição, gráfico, páginas, comandos "
+                       "e condições dos eventos</b> — ainda não existem no MapXXX.json e podem voltar "
+                       "para a última versão salva.<br><br>"
+                       "Depois de salvar no RPG Maker MZ, volte ao LUDO e clique em "
+                       "<b>JÁ SALVEI — CONTINUAR</b>."
+                       "</div>"));
+    box.setStyleSheet(QStringLiteral(
+        "QLabel#qt_msgbox_label { min-width: 700px; }"
+        "QLabel#qt_msgbox_informativelabel { min-width: 700px; }"
+        "QPushButton { min-width: 210px; min-height: 42px; font-size: 13pt; font-weight: 600; }"));
+    QPushButton* proceed = box.addButton(QStringLiteral("JÁ SALVEI — CONTINUAR"), QMessageBox::AcceptRole);
+    box.addButton(QStringLiteral("Cancelar"), QMessageBox::RejectRole);
+    box.setDefaultButton(proceed);
+    box.exec();
+    return box.clickedButton() == proceed;
 }
 
 inline void eachTile(const core::LayerPtr& layer,
@@ -1736,7 +1806,8 @@ inline void cleanupStaleMapImages(const QString& folder, const QString& prefix,
 inline bool exportBoundMap(const core::Editor& editor, const core::MapDoc& sourceDoc,
                            const QString& rootPathInput, int targetMapId,
                            bool fitReferenceGrid, QWidget* parent,
-                           bool showSuccess = false, int publicationParentId = -1)
+                           bool showSuccess = false, int publicationParentId = -1,
+                           bool rpgMakerSaveConfirmed = false)
 {
     const QString engineName = core::rpgMakerEngineName(editor.rpgMakerEngine);
     const QString engineShort = core::rpgMakerEngineId(editor.rpgMakerEngine).toUpper();
@@ -1764,6 +1835,11 @@ inline bool exportBoundMap(const core::Editor& editor, const core::MapDoc& sourc
     const QDir rpgMakerRoot(rootPath);
     const QString prefix = mapPrefix(targetMapId);
     const QString targetMapPath = rpgMakerRoot.filePath(QStringLiteral("data/") + mapJsonName(targetMapId));
+
+    if (QFileInfo::exists(targetMapPath) && !rpgMakerSaveConfirmed &&
+        !confirmRpgMakerSavedBeforeExternalWrite(parent, editor.rpgMakerEngine, rootPath)) {
+        return false;
+    }
 
     // Log próprio, síncrono e com flush. O log Qt do launcher pode ficar em 0 KB
     // quando o Windows encerra o processo por corrupção de heap antes do flush.
@@ -2046,10 +2122,43 @@ inline bool exportBoundMap(const core::Editor& editor, const core::MapDoc& sourc
                                       finalReferencePath, error);
     }
     if (error.isEmpty()) {
-        mapInfosWritten = copyAtomic(stagedMapInfos, mapInfosPath, error);
+        // MapInfos também pode ter sido salvo pelo RPG Maker enquanto o LUDO
+        // renderizava. Atualizamos o backup e refazemos o merge sobre o arquivo
+        // mais recente em vez de publicar o snapshot preparado no início.
+        if (!copyAtomic(mapInfosPath, backupMapInfosLast, error)) {
+            // error preenchido por copyAtomic
+        } else {
+            QByteArray latestMapInfos;
+            bool latestMapInfoCreated = false;
+            if (makePreparedMapInfosJson(mapInfosPath, targetMapId, doc, latestMapInfos,
+                                         latestMapInfoCreated, error)) {
+                applyEditorMapInfoHierarchy(editor, doc, targetMapId, latestMapInfos, publicationParentId);
+                mapInfosWritten = writeAtomic(mapInfosPath, latestMapInfos, error);
+            }
+        }
     }
     if (error.isEmpty()) {
-        mapWritten = copyAtomic(stagedMap, targetMapPath, error);
+        // Eventos são propriedade do RPG Maker. Releia MapXXX no ÚLTIMO instante
+        // possível para incorporar qualquer save feito durante a exportação.
+        if (mapExisted && !QFileInfo::exists(targetMapPath)) {
+            error = QStringLiteral("O MapXXX.json foi removido ou movido durante a exportação. "
+                                   "A gravação foi cancelada para preservar a autoria do RPG Maker.");
+        } else {
+            if (mapExisted && !copyAtomic(targetMapPath, backupMapLast, error)) {
+                // error preenchido por copyAtomic
+            } else {
+                QByteArray latestPreparedMap;
+                bool latestMapCreated = false;
+                if (makePreparedMapJson(targetMapPath, doc, referenceBase, latestPreparedMap,
+                                        latestMapCreated, error)) {
+                    if (mapExisted && latestMapCreated) {
+                        error = QStringLiteral("O MapXXX.json mudou durante a exportação e não pôde ser relido com segurança.");
+                    } else {
+                        mapWritten = writeAtomic(targetMapPath, latestPreparedMap, error);
+                    }
+                }
+            }
+        }
     }
 
     progress.close();
@@ -2311,6 +2420,11 @@ inline void run(const core::Editor& editor, QWidget* parent)
     const bool fitReferenceGrid = fitReferenceToGrid->isChecked();
     const QString prefix = mapPrefix(targetMapId);
     const QString targetMapPath = rpgMakerRoot.filePath(QStringLiteral("data/") + mapJsonName(targetMapId));
+
+    if (QFileInfo::exists(targetMapPath) &&
+        !confirmRpgMakerSavedBeforeExternalWrite(parent, engine, rootPath)) {
+        return;
+    }
 
     // Log próprio, síncrono e com flush. O log Qt do launcher pode ficar em 0 KB
     // quando o Windows encerra o processo por corrupção de heap antes do flush.
@@ -2592,10 +2706,43 @@ inline void run(const core::Editor& editor, QWidget* parent)
                                       finalReferencePath, error);
     }
     if (error.isEmpty()) {
-        mapInfosWritten = copyAtomic(stagedMapInfos, mapInfosPath, error);
+        // MapInfos também pode ter sido salvo pelo RPG Maker enquanto o LUDO
+        // renderizava. Atualizamos o backup e refazemos o merge sobre o arquivo
+        // mais recente em vez de publicar o snapshot preparado no início.
+        if (!copyAtomic(mapInfosPath, backupMapInfosLast, error)) {
+            // error preenchido por copyAtomic
+        } else {
+            QByteArray latestMapInfos;
+            bool latestMapInfoCreated = false;
+            if (makePreparedMapInfosJson(mapInfosPath, targetMapId, doc, latestMapInfos,
+                                         latestMapInfoCreated, error)) {
+                applyEditorMapInfoHierarchy(editor, doc, targetMapId, latestMapInfos);
+                mapInfosWritten = writeAtomic(mapInfosPath, latestMapInfos, error);
+            }
+        }
     }
     if (error.isEmpty()) {
-        mapWritten = copyAtomic(stagedMap, targetMapPath, error);
+        // Eventos são propriedade do RPG Maker. Releia MapXXX no ÚLTIMO instante
+        // possível para incorporar qualquer save feito durante a exportação.
+        if (mapExisted && !QFileInfo::exists(targetMapPath)) {
+            error = QStringLiteral("O MapXXX.json foi removido ou movido durante a exportação. "
+                                   "A gravação foi cancelada para preservar a autoria do RPG Maker.");
+        } else {
+            if (mapExisted && !copyAtomic(targetMapPath, backupMapLast, error)) {
+                // error preenchido por copyAtomic
+            } else {
+                QByteArray latestPreparedMap;
+                bool latestMapCreated = false;
+                if (makePreparedMapJson(targetMapPath, doc, referenceBase, latestPreparedMap,
+                                        latestMapCreated, error)) {
+                    if (mapExisted && latestMapCreated) {
+                        error = QStringLiteral("O MapXXX.json mudou durante a exportação e não pôde ser relido com segurança.");
+                    } else {
+                        mapWritten = writeAtomic(targetMapPath, latestPreparedMap, error);
+                    }
+                }
+            }
+        }
     }
 
     progress.close();

@@ -22,6 +22,7 @@
 #include <QSizeF>
 #include <QImage>
 #include <QJsonObject>
+#include <QSet>
 
 namespace core {
 
@@ -202,6 +203,12 @@ public:
     // Projeto RPG Maker de destino vinculado. MV e MZ compartilham a mesma
     // árvore/IDs via data/MapInfos.json.
     QString rpgMakerProjectRoot;
+
+    // Alterações estruturais locais (criar/renomear/mover/excluir mapa) não são
+    // publicadas automaticamente. Elas permanecem no .ludo até uma sincronização
+    // explícita, evitando que o RPG Maker recarregue a árvore no meio da edição.
+    bool rpgMakerStructurePending = false;
+    QSet<int> rpgMakerPendingDeletedMapIds;
 
     /// Pasta-base do projeto e seu navegador de conteúdo estilo editores modernos.
     QString projectRoot() const;

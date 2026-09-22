@@ -136,6 +136,8 @@ void Editor::newProject()
     projectPath.clear();
     rpgMakerEngine = RpgMakerEngine::MZ;
     rpgMakerProjectRoot.clear();
+    rpgMakerStructurePending = false;
+    rpgMakerPendingDeletedMapIds.clear();
     projectDirty = false;
 
     MapInfo info;

@@ -36,10 +36,14 @@ public:
 
     void publishProject(CollaborationClient* team);
     bool saveAllDirtyMaps();
+    bool hasPendingStructure() const;
 
-    // Chamado após uma exclusão estrutural já confirmada pelo usuário.
+    // Exclusões também são diferidas: apenas entram no RPG Maker quando o usuário
+    // confirma uma sincronização explícita.
     bool deleteMaps(const QVector<int>& rpgMakerMapIds, QString* error = nullptr);
 
+    // Mantém o nome histórico da API, mas agora apenas MARCA a estrutura como
+    // pendente. Nunca escreve MapInfos/MapXXX automaticamente.
     void scheduleStructurePush();
 
     void setStatusHandler(std::function<void(const QString&)> fn) { m_status = std::move(fn); }
@@ -50,7 +54,6 @@ private:
     QWidget* m_owner = nullptr;
     QFileSystemWatcher m_watcher;
     QTimer m_externalDebounce;
-    QTimer m_structureDebounce;
     bool m_syncing = false;
     QByteArray m_lastWrittenMapInfosHash;
     QByteArray m_lastStructureSignature;
@@ -69,6 +72,8 @@ private:
     bool loadMapInfos(QJsonArray& infos, QString* error = nullptr) const;
     bool writeMapInfos(const QJsonArray& infos, QString* error = nullptr);
     QByteArray structureSignature() const;
+    QByteArray rpgMakerStructureSignature(const QJsonArray& infos) const;
+    void refreshPendingStructureState(const QJsonArray* knownInfos = nullptr);
     int firstFreeMapId(const QJsonArray& infos, const QSet<int>& reserved) const;
 
     bool pullStructure(bool importNewMaps, QString* error = nullptr);
