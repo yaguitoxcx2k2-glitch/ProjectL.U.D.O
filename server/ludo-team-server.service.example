@@ -1,0 +1,22 @@
+[Unit]
+Description=LUDO Team Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ludo-team
+Group=ludo-team
+WorkingDirectory=/opt/ludo-team-server
+Environment=LUDO_TEAM_CONFIG=/etc/ludo-team-server.env
+ExecStart=/opt/ludo-team-server/run_server.sh
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ludo-team-server
+
+[Install]
+WantedBy=multi-user.target

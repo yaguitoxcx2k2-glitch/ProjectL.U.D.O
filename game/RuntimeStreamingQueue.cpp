@@ -1,0 +1,13 @@
+#include "RuntimeStreamingQueue.h"
+namespace game {
+bool RuntimeStreamingQueue::enqueue(const RuntimeStreamRequest& r){if(r.key.trimmed().isEmpty())return false;for(const auto& i:m_items)if(i.request.key==r.key&&i.state!=RuntimeStreamState::Failed&&i.state!=RuntimeStreamState::Cancelled)return false;RuntimeStreamItem i;i.request=r;m_items.push_back(i);return true;}
+int RuntimeStreamingQueue::bestQueuedIndex() const {int best=-1;for(int n=0;n<m_items.size();++n){const auto&i=m_items[n];if(i.state!=RuntimeStreamState::Queued)continue;if(best<0||int(i.request.priority)>int(m_items[best].request.priority))best=n;}return best;}
+bool RuntimeStreamingQueue::beginNext(RuntimeStreamItem* out){const int n=bestQueuedIndex();if(n<0)return false;m_items[n].state=RuntimeStreamState::Loading;if(out)*out=m_items[n];return true;}
+bool RuntimeStreamingQueue::completeCpuLoad(const QString& key,const QByteArray& payload,QString error){for(auto&i:m_items)if(i.request.key==key&&i.state==RuntimeStreamState::Loading){i.error=error;if(!error.isEmpty()){i.state=RuntimeStreamState::Failed;i.payload.clear();}else{i.payload=payload;i.state=RuntimeStreamState::ReadyForUpload;}return true;}return false;}
+bool RuntimeStreamingQueue::markUploaded(const QString& key){for(auto&i:m_items)if(i.request.key==key&&i.state==RuntimeStreamState::ReadyForUpload){i.state=RuntimeStreamState::Complete;i.payload.clear();return true;}return false;}
+bool RuntimeStreamingQueue::cancel(const QString& key){for(auto&i:m_items)if(i.request.key==key&&(i.state==RuntimeStreamState::Queued||i.state==RuntimeStreamState::Loading||i.state==RuntimeStreamState::ReadyForUpload)){i.state=RuntimeStreamState::Cancelled;i.payload.clear();return true;}return false;}
+QVector<RuntimeStreamItem> RuntimeStreamingQueue::readyForUpload(qint64 budget) const {QVector<RuntimeStreamItem> out;qint64 used=0;for(const auto&i:m_items){if(i.state!=RuntimeStreamState::ReadyForUpload)continue;const qint64 bytes=i.payload.size();if(!out.isEmpty()&&budget>0&&used+bytes>budget)continue;out.push_back(i);used+=bytes;}return out;}
+RuntimeStreamItem RuntimeStreamingQueue::item(const QString& key) const {for(const auto&i:m_items)if(i.request.key==key)return i;return {};}
+int RuntimeStreamingQueue::pendingCount() const {int n=0;for(const auto&i:m_items)if(i.state==RuntimeStreamState::Queued||i.state==RuntimeStreamState::Loading||i.state==RuntimeStreamState::ReadyForUpload)++n;return n;}
+void RuntimeStreamingQueue::clearGeneration(quint64 generation){for(auto&i:m_items)if(i.request.generation!=generation&&(i.state==RuntimeStreamState::Queued||i.state==RuntimeStreamState::ReadyForUpload)){i.state=RuntimeStreamState::Cancelled;i.payload.clear();}}
+} // namespace game

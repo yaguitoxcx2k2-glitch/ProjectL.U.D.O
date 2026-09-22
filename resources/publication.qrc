@@ -1,0 +1,5 @@
+<RCC>
+ <qresource prefix="/ludo/icons">
+  <file alias="rpg-maker.png">RPGMakerIcon.png</file>
+ </qresource>
+</RCC>
